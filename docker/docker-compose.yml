@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  iwr6843:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: iwr6843-dev
+    privileged: true  # Required for USB device access
+    volumes:
+      # Mount the TI driver submodule for live development
+      - ../mmwave_ti_ros:/root/catkin_ws/src/mmwave_ti_ros
+      # Mount config and scripts
+      - ../config:/root/config
+      - ../scripts:/root/scripts
+      # Persist build artifacts (optional, comment out for clean builds)
+      - catkin_build:/root/catkin_ws/build
+      - catkin_devel:/root/catkin_ws/devel
+      # GUI support (X11 forwarding)
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - $HOME/.Xauthority:/root/.Xauthority:rw
+    devices:
+      # USB device access for radar
+      - /dev/bus/usb:/dev/bus/usb
+    network_mode: host  # Use host networking for ROS communication
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - RADAR_CONFIG_PATH=/root/config/radar_config.cfg
+    stdin_open: true
+    tty: true
+    command: /bin/bash
+
+volumes:
+  catkin_build:
+  catkin_devel:

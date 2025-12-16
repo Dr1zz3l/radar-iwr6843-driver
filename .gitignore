@@ -1,0 +1,12 @@
+# ROS build artifacts
+mmwave_ti_ros/build/
+mmwave_ti_ros/devel/
+mmwave_ti_ros/.catkin_workspace
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log

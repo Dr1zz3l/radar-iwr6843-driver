@@ -1,0 +1,37 @@
+{
+  "name": "IWR6843 ROS Development",
+  "dockerComposeFile": "../docker/docker-compose.yml",
+  "service": "iwr6843",
+  "workspaceFolder": "/root/catkin_ws",
+  
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-vscode.cpptools",
+        "ms-iot.vscode-ros",
+        "dotjoshjohnson.xml",
+        "redhat.vscode-yaml"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "python.defaultInterpreterPath": "/usr/bin/python3"
+      }
+    }
+  },
+  
+  "remoteUser": "root",
+  "postCreateCommand": "echo 'source /opt/ros/noetic/setup.bash' >> ~/.bashrc && echo 'source /root/catkin_ws/devel/setup.bash 2>/dev/null || true' >> ~/.bashrc",
+  "postStartCommand": "rosdep update || true",
+  
+  "mounts": [
+    "source=/dev/bus/usb,target=/dev/bus/usb,type=bind"
+  ],
+  
+  "runArgs": [
+    "--privileged",
+    "--network=host"
+  ],
+  
+  "features": {}
+}
