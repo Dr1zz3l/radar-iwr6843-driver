@@ -1,7 +1,10 @@
 # ROS build artifacts
-mmwave_ti_ros/build/
-mmwave_ti_ros/devel/
-mmwave_ti_ros/.catkin_workspace
+mmwave_ti_ros/ros1_driver/build/
+mmwave_ti_ros/ros1_driver/devel/
+mmwave_ti_ros/ros1_driver/.catkin_workspace
+mmwave_ti_ros/ros2_driver/build/
+mmwave_ti_ros/ros2_driver/install/
+mmwave_ti_ros/ros2_driver/log/
 
 # IDE files
 .vscode/
