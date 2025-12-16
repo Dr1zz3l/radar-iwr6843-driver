@@ -20,7 +20,10 @@ void ParameterParser::ParamsParser(ti_mmwave_rospkg::mmWaveCLI &srv, ros::NodeHa
     int i = 0;
     while (std::getline(ss, token, ' ')) {
         v.push_back(token);
-        if (i > 0) {
+        if (i == 0) {
+            // First token is the command name
+            req = token;
+        } else {
             if (!req.compare("profileCfg")) {
                 switch (i) {
                     case 2:
@@ -70,9 +73,9 @@ void ParameterParser::ParamsParser(ti_mmwave_rospkg::mmWaveCLI &srv, ros::NodeHa
 		    nh.setParam("/ti_mmwave/zoneMaxZ", std::stoi(token)); break;		    
 
 	      }
-	    } else req = token;
+	    }
+        }
         i++;
-	}
     }
 }
 
@@ -96,18 +99,30 @@ void ParameterParser::CalParams(ros::NodeHandle &nh) {
     float zoneMinZ;
     float zoneMaxZ;
 
-    nh.getParam("/ti_mmwave/startFreq", startFreq);
-    nh.getParam("/ti_mmwave/idleTime", idleTime);
-    nh.getParam("/ti_mmwave/adcStartTime", adcStartTime);
-    nh.getParam("/ti_mmwave/rampEndTime", rampEndTime);
-    nh.getParam("/ti_mmwave/digOutSampleRate", digOutSampleRate);
-    nh.getParam("/ti_mmwave/freqSlopeConst", freqSlopeConst);
-    nh.getParam("/ti_mmwave/numAdcSamples", numAdcSamples);
+    // Get raw parameters and check if they exist
+    bool hasAllParams = true;
+    hasAllParams &= nh.getParam("/ti_mmwave/startFreq", startFreq);
+    hasAllParams &= nh.getParam("/ti_mmwave/idleTime", idleTime);
+    hasAllParams &= nh.getParam("/ti_mmwave/adcStartTime", adcStartTime);
+    hasAllParams &= nh.getParam("/ti_mmwave/rampEndTime", rampEndTime);
+    hasAllParams &= nh.getParam("/ti_mmwave/digOutSampleRate", digOutSampleRate);
+    hasAllParams &= nh.getParam("/ti_mmwave/freqSlopeConst", freqSlopeConst);
+    hasAllParams &= nh.getParam("/ti_mmwave/numAdcSamples", numAdcSamples);
 
-    nh.getParam("/ti_mmwave/chirpStartIdx", chirpStartIdx);
-    nh.getParam("/ti_mmwave/chirpEndIdx", chirpEndIdx);
-    nh.getParam("/ti_mmwave/numLoops", numLoops);
-    nh.getParam("/ti_mmwave/framePeriodicity", framePeriodicity);
+    hasAllParams &= nh.getParam("/ti_mmwave/chirpStartIdx", chirpStartIdx);
+    hasAllParams &= nh.getParam("/ti_mmwave/chirpEndIdx", chirpEndIdx);
+    hasAllParams &= nh.getParam("/ti_mmwave/numLoops", numLoops);
+    hasAllParams &= nh.getParam("/ti_mmwave/framePeriodicity", framePeriodicity);
+
+    if (!hasAllParams) {
+        ROS_ERROR("ParameterParser::CalParams: Failed to get all required raw parameters!");
+        ROS_ERROR("Make sure profileCfg and frameCfg commands were processed successfully.");
+    }
+
+    ROS_INFO("Raw parameters: startFreq=%.2f, idleTime=%.2f, rampEndTime=%.2f, digOutSampleRate=%.2f, freqSlopeConst=%.2f",
+             startFreq, idleTime, rampEndTime, digOutSampleRate, freqSlopeConst);
+    ROS_INFO("Raw parameters: numAdcSamples=%.0f, chirpStartIdx=%d, chirpEndIdx=%d, numLoops=%d, framePeriodicity=%.3f",
+             numAdcSamples, chirpStartIdx, chirpEndIdx, numLoops, framePeriodicity);
 
     int ntx = chirpEndIdx - chirpStartIdx + 1;
     int nd = numLoops;
@@ -124,6 +139,11 @@ void ParameterParser::CalParams(ros::NodeHandle &nh) {
     float max_range = nr * vrange;
     float max_vel = c0 / (2 * fc * PRI) / ntx;
     float vvel = max_vel / nd;
+
+    ROS_INFO("Calculated parameters: ntx=%d, fs=%.2f, fc=%.2f, BW=%.2f, PRI=%.6f",
+             ntx, fs, fc, BW, PRI);
+    ROS_INFO("Calculated parameters: vrange=%.4f, max_range=%.2f, max_vel=%.2f, vvel=%.4f",
+             vrange, max_range, max_vel, vvel);
 
     nh.setParam("/ti_mmwave/num_TX", ntx);
     nh.setParam("/ti_mmwave/f_s", fs);

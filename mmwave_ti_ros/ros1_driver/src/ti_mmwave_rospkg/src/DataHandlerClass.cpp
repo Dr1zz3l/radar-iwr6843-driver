@@ -50,8 +50,20 @@ DataUARTHandler::DataUARTHandler(ros::NodeHandle* nh) : currentBufp(&pingPongBuf
     maxAllowedElevationAngleDeg = 90; // Use max angle if none specified
     maxAllowedAzimuthAngleDeg = 90; // Use max angle if none specified
 
-    // Wait for parameters
-    while(!nh->hasParam("/ti_mmwave/doppler_vel_resolution")){}
+    // Wait for parameters with timeout
+    ROS_INFO("DataUARTHandler: Waiting for configuration parameters...");
+    int timeout_counter = 0;
+    while(!nh->hasParam("/ti_mmwave/doppler_vel_resolution"))
+    {
+        ros::Duration(0.1).sleep();
+        timeout_counter++;
+        if(timeout_counter > 100) // 10 second timeout
+        {
+            ROS_ERROR("DataUARTHandler: Timeout waiting for valid parameters!");
+            ROS_ERROR("DataUARTHandler: Make sure mmWaveQuickConfig has completed successfully.");
+            break;
+        }
+    }
 
     nh->getParam("/ti_mmwave/numAdcSamples", nr);
     nh->getParam("/ti_mmwave/numLoops", nd);
