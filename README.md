@@ -6,14 +6,19 @@ A ROS1-compatible driver for the IWR6843AOPEVM radar sensor, configured for prec
 
 1. **Install Dev Containers extension in VS Code** (recommended)
 
-2. **Setup the TI driver submodule**:
+2. **Enable GUI support** (required after reboot):
+   ```bash
+   ./scripts/enable_gui.sh
+   ```
+
+3. **Setup the TI driver submodule**:
    ```bash
    ./scripts/setup_submodule.sh
    ```
 
-3. **Open in container**: Press `F1` → "Dev Containers: Reopen in Container"
+4. **Open in container**: Press `F1` → "Dev Containers: Reopen in Container"
 
-4. **Build and run**:
+5. **Build and run**:
    ```bash
    catkin_make
    source devel/setup.bash
