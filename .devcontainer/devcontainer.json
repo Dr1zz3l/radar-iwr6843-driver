@@ -2,7 +2,7 @@
   "name": "IWR6843 ROS Development",
   "dockerComposeFile": "../docker/docker-compose.yml",
   "service": "iwr6843",
-  "workspaceFolder": "/root/catkin_ws",
+  "workspaceFolder": "/workspace",
   
   "customizations": {
     "vscode": {
