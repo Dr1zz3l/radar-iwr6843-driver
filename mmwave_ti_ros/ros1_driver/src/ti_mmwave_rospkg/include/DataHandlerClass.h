@@ -155,6 +155,16 @@ private:
     ros::Publisher radar_scan_pub;
     ros::Publisher marker_pub;
     ros::Publisher radar_occupancy_pub;
+    
+    // New velocity-focused publisher for radar-inertial odometry
+    ros::Publisher velocity_cloud_pub;
+    bool publish_velocity_cloud;
+    
+    // Timestamp captured when magic word is detected (data arrival time)
+    ros::Time data_arrival_timestamp;
+    pthread_mutex_t timestamp_mutex;
 };
 
-#endif 
+#endif
+
+
