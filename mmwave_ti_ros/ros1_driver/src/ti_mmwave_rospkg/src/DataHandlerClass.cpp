@@ -47,6 +47,14 @@ DataUARTHandler::DataUARTHandler(ros::NodeHandle* nh) : currentBufp(&pingPongBuf
     radar_scan_pub = nh->advertise<ti_mmwave_rospkg::RadarScan>("/ti_mmwave/radar_scan", 100);
     radar_occupancy_pub = nh->advertise<ti_mmwave_rospkg::RadarOccupancy>("/ti_mmwave/radar_occupancy", 100);
     marker_pub = nh->advertise<visualization_msgs::Marker>("/ti_mmwave/radar_scan_markers", 100);
+    
+    // PRIORITY 4: Initialize new velocity-focused publisher with parameter control
+    nh->param("publish_velocity_cloud", publish_velocity_cloud, true);
+    if (publish_velocity_cloud) {
+        velocity_cloud_pub = nh->advertise<sensor_msgs::PointCloud2>("/mmWaveDataHdl/RScanVelocity", 100);
+        ROS_INFO("DataUARTHandler: Velocity cloud publisher enabled on /mmWaveDataHdl/RScanVelocity");
+    }
+    
     maxAllowedElevationAngleDeg = 90; // Use max angle if none specified
     maxAllowedAzimuthAngleDeg = 90; // Use max angle if none specified
 
@@ -191,6 +199,12 @@ void *DataUARTHandler::readIncomingData(void)
         /*If a magicWord is found wait for sorting to finish and switch buffers*/
         if( isMagicWord(last8Bytes) )
         {
+            // PRIORITY 2: Capture timestamp when data arrives (magic word detected)
+            ros::Time arrival_time = ros::Time::now();
+            pthread_mutex_lock(&timestamp_mutex);
+            data_arrival_timestamp = arrival_time;
+            pthread_mutex_unlock(&timestamp_mutex);
+            
             //ROS_INFO("Found magic word");
         
             /*Lock countSync Mutex while unlocking nextBufp so that the swap thread can use it*/
@@ -317,6 +331,9 @@ void *DataUARTHandler::sortIncomingData( void )
     boost::shared_ptr<pcl::PointCloud<mmWaveCloudType>> RScan(new pcl::PointCloud<mmWaveCloudType>);
     ti_mmwave_rospkg::RadarScan radarscan;
     ti_mmwave_rospkg::RadarOccupancy radaroccupancy;
+    
+    // PRIORITY 1: New PointCloud2 message for velocity-focused data
+    sensor_msgs::PointCloud2 velocity_cloud_msg;
 
     //wait for first packet to arrive
     pthread_mutex_lock(&countSync_mutex);
@@ -743,7 +760,56 @@ void *DataUARTHandler::sortIncomingData( void )
                     //ROS_INFO("mmwData.numObjOut after = %d", mmwData.numObjOut);
                     //ROS_INFO("DataUARTHandler Sort Thread: number of obj = %d", mmwData.numObjOut );
                 }
+                
+                // PRIORITY 3: Publish existing pointcloud (backward compatibility)
                 DataUARTHandler_pub.publish(RScan);
+                
+                // PRIORITY 1: Create and publish new velocity-focused PointCloud2
+                if (publish_velocity_cloud && mmwData.numObjOut > 0)
+                {
+                    // Get captured timestamp
+                    pthread_mutex_lock(&timestamp_mutex);
+                    ros::Time captured_time = data_arrival_timestamp;
+                    pthread_mutex_unlock(&timestamp_mutex);
+                    
+                    // Setup PointCloud2 message with custom fields
+                    velocity_cloud_msg.header.stamp = captured_time; // PRIORITY 2: Use captured arrival time
+                    velocity_cloud_msg.header.frame_id = frameID;
+                    velocity_cloud_msg.height = 1;
+                    velocity_cloud_msg.width = mmwData.numObjOut;
+                    velocity_cloud_msg.is_bigendian = false;
+                    velocity_cloud_msg.is_dense = true;
+                    
+                    // Define fields: x, y, z, velocity, intensity
+                    sensor_msgs::PointCloud2Modifier modifier(velocity_cloud_msg);
+                    modifier.setPointCloud2Fields(5,
+                        "x", 1, sensor_msgs::PointField::FLOAT32,
+                        "y", 1, sensor_msgs::PointField::FLOAT32,
+                        "z", 1, sensor_msgs::PointField::FLOAT32,
+                        "velocity", 1, sensor_msgs::PointField::FLOAT32,
+                        "intensity", 1, sensor_msgs::PointField::FLOAT32);
+                    
+                    modifier.resize(mmwData.numObjOut);
+                    
+                    // Create iterators for each field
+                    sensor_msgs::PointCloud2Iterator<float> iter_x(velocity_cloud_msg, "x");
+                    sensor_msgs::PointCloud2Iterator<float> iter_y(velocity_cloud_msg, "y");
+                    sensor_msgs::PointCloud2Iterator<float> iter_z(velocity_cloud_msg, "z");
+                    sensor_msgs::PointCloud2Iterator<float> iter_velocity(velocity_cloud_msg, "velocity");
+                    sensor_msgs::PointCloud2Iterator<float> iter_intensity(velocity_cloud_msg, "intensity");
+                    
+                    // Populate the message with filtered points
+                    for (size_t i = 0; i < mmwData.numObjOut; ++i, ++iter_x, ++iter_y, ++iter_z, ++iter_velocity, ++iter_intensity)
+                    {
+                        *iter_x = RScan->points[i].x;
+                        *iter_y = RScan->points[i].y;
+                        *iter_z = RScan->points[i].z;
+                        *iter_velocity = RScan->points[i].velocity;
+                        *iter_intensity = RScan->points[i].intensity;
+                    }
+                    
+                    velocity_cloud_pub.publish(velocity_cloud_msg);
+                }
 
                 //ROS_INFO("DataUARTHandler Sort Thread : CHECK_TLV_TYPE state says tlvCount max was reached, going to switch buffer state");
                 sorterState = SWAP_BUFFERS;
@@ -873,6 +939,7 @@ void DataUARTHandler::start(void)
     pthread_mutex_init(&countSync_mutex, NULL);
     pthread_mutex_init(&nextBufp_mutex, NULL);
     pthread_mutex_init(&currentBufp_mutex, NULL);
+    pthread_mutex_init(&timestamp_mutex, NULL);  // Initialize timestamp mutex
     pthread_cond_init(&countSync_max_cv, NULL);
     pthread_cond_init(&read_go_cv, NULL);
     pthread_cond_init(&sort_go_cv, NULL);
@@ -920,6 +987,7 @@ void DataUARTHandler::start(void)
     pthread_mutex_destroy(&countSync_mutex);
     pthread_mutex_destroy(&nextBufp_mutex);
     pthread_mutex_destroy(&currentBufp_mutex);
+    pthread_mutex_destroy(&timestamp_mutex);
     pthread_cond_destroy(&countSync_max_cv);
     pthread_cond_destroy(&read_go_cv);
     pthread_cond_destroy(&sort_go_cv);
