@@ -1,0 +1,3 @@
+[submodule "mmwave_ti_ros"]
+	path = mmwave_ti_ros
+	url = https://git.ti.com/git/mmwave_radar/mmwave_ti_ros.git
