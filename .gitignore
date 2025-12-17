@@ -13,3 +13,4 @@ mmwave_ti_ros/ros2_driver/log/
 
 # Logs
 *.log
+rosbags/
