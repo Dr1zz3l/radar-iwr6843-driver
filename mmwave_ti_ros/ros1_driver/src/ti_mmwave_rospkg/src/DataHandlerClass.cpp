@@ -334,6 +334,9 @@ void *DataUARTHandler::sortIncomingData( void )
     
     // PRIORITY 1: New PointCloud2 message for velocity-focused data
     sensor_msgs::PointCloud2 velocity_cloud_msg;
+    
+    // Storage for noise values from side info (parallel to RScan points)
+    std::vector<float> noise_values;
 
     //wait for first packet to arrive
     pthread_mutex_lock(&countSync_mutex);
@@ -448,6 +451,10 @@ void *DataUARTHandler::sortIncomingData( void )
             RScan->width = mmwData.numObjOut;
             RScan->is_dense = 1;
             RScan->points.resize(RScan->width * RScan->height);
+            
+            // Resize noise storage to match number of points
+            noise_values.clear();
+            noise_values.resize(mmwData.numObjOut, 0.0f);
             
             // Calculate ratios for max desired elevation and azimuth angles
             if ((maxAllowedElevationAngleDeg >= 0) && (maxAllowedElevationAngleDeg < 90)) {
@@ -600,6 +607,11 @@ void *DataUARTHandler::sortIncomingData( void )
                     currentDatap += ( sizeof(mmwData.sideInfo.noise) );
 
                     RScan->points[i].intensity = (float) mmwData.sideInfo.snr / 10.0;   // Use snr for "intensity" field (divide by 10 since unit of snr is 0.1dB)
+                    
+                    // Store noise for velocity cloud publisher (convert from 0.1dB steps to dB)
+                    if (i < noise_values.size()) {
+                        noise_values[i] = (float) mmwData.sideInfo.noise / 10.0f;
+                    }
                 }
             }
             else  // else just skip side info section if we have not already received and parsed detected obj list
@@ -780,14 +792,16 @@ void *DataUARTHandler::sortIncomingData( void )
                     velocity_cloud_msg.is_bigendian = false;
                     velocity_cloud_msg.is_dense = true;
                     
-                    // Define fields: x, y, z, velocity, intensity
+                    // Define fields: x, y, z, velocity, intensity, range, noise
                     sensor_msgs::PointCloud2Modifier modifier(velocity_cloud_msg);
-                    modifier.setPointCloud2Fields(5,
+                    modifier.setPointCloud2Fields(7,
                         "x", 1, sensor_msgs::PointField::FLOAT32,
                         "y", 1, sensor_msgs::PointField::FLOAT32,
                         "z", 1, sensor_msgs::PointField::FLOAT32,
                         "velocity", 1, sensor_msgs::PointField::FLOAT32,
-                        "intensity", 1, sensor_msgs::PointField::FLOAT32);
+                        "intensity", 1, sensor_msgs::PointField::FLOAT32,
+                        "range", 1, sensor_msgs::PointField::FLOAT32,
+                        "noise", 1, sensor_msgs::PointField::FLOAT32);
                     
                     modifier.resize(mmwData.numObjOut);
                     
@@ -797,15 +811,23 @@ void *DataUARTHandler::sortIncomingData( void )
                     sensor_msgs::PointCloud2Iterator<float> iter_z(velocity_cloud_msg, "z");
                     sensor_msgs::PointCloud2Iterator<float> iter_velocity(velocity_cloud_msg, "velocity");
                     sensor_msgs::PointCloud2Iterator<float> iter_intensity(velocity_cloud_msg, "intensity");
+                    sensor_msgs::PointCloud2Iterator<float> iter_range(velocity_cloud_msg, "range");
+                    sensor_msgs::PointCloud2Iterator<float> iter_noise(velocity_cloud_msg, "noise");
                     
-                    // Populate the message with filtered points
-                    for (size_t i = 0; i < mmwData.numObjOut; ++i, ++iter_x, ++iter_y, ++iter_z, ++iter_velocity, ++iter_intensity)
+                    // Populate the message with all detected points
+                    for (size_t i = 0; i < mmwData.numObjOut; ++i, ++iter_x, ++iter_y, ++iter_z, ++iter_velocity, ++iter_intensity, ++iter_range, ++iter_noise)
                     {
-                        *iter_x = RScan->points[i].x;
-                        *iter_y = RScan->points[i].y;
-                        *iter_z = RScan->points[i].z;
+                        float x = RScan->points[i].x;
+                        float y = RScan->points[i].y;
+                        float z = RScan->points[i].z;
+                        
+                        *iter_x = x;
+                        *iter_y = y;
+                        *iter_z = z;
                         *iter_velocity = RScan->points[i].velocity;
                         *iter_intensity = RScan->points[i].intensity;
+                        *iter_range = sqrt(x*x + y*y + z*z);
+                        *iter_noise = (i < noise_values.size()) ? noise_values[i] : 0.0f;
                     }
                     
                     velocity_cloud_pub.publish(velocity_cloud_msg);

@@ -18,7 +18,7 @@ The TI mmWave ROS driver publishes **5 different topics** for different use case
   - Raw radial velocities (m/s)
   - All detected points (no filtering)
   - Standard ROS PointCloud2 format
-- **Fields**: `x, y, z, velocity, intensity`
+- **Fields**: `x, y, z, velocity, intensity, range, noise`
 - **Visualization**: Purple/red spheres colored by velocity in RViz
 
 ### ORIGINAL Publishers (From TI Driver)
@@ -97,12 +97,14 @@ This will display:
 ### 1. Custom PointCloud2 with Velocity Data (PRIORITY 1)
 - **New Topic**: `/mmWaveDataHdl/RScanVelocity`
 - **Message Type**: `sensor_msgs::PointCloud2`
-- **Fields**:
+- **Fields** (7 total):
   - `x` (float32) - X position in ROS coordinate frame (forward)
   - `y` (float32) - Y position in ROS coordinate frame (left)
   - `z` (float32) - Z position in ROS coordinate frame (up)
   - **`velocity` (float32)** - Radial Doppler velocity in m/s
-  - `intensity` (float32) - SNR or peak intensity in dB
+  - `intensity` (float32) - SNR (signal-to-noise ratio) in dB
+  - **`range` (float32)** - Euclidean distance from sensor (sqrt(x²+y²+z²)) in meters
+  - **`noise` (float32)** - Noise floor level in dB
 
 ### 2. Accurate Timestamping (PRIORITY 2 - CRITICAL)
 - Timestamp captured at **magic word detection** (data arrival time)
@@ -134,7 +136,9 @@ This will display:
 2. **DataHandlerClass.cpp**
    - Constructor: Initialize new publisher and read parameter
    - `readIncomingData()`: Capture timestamp at magic word detection
-   - `sortIncomingData()`: Create and publish velocity PointCloud2
+   - `sortIncomingData()`: Create and publish velocity PointCloud2 with 7 fields (x, y, z, velocity, intensity, range, noise)
+   - `READ_SIDE_INFO`: Store noise values from TLV side info packets
+   - `READ_OBJ_STRUCT`: Initialize noise storage vector
    - `start()`: Initialize timestamp mutex
    - Mutex cleanup in destructor
 
@@ -185,6 +189,67 @@ rostopic echo /mmWaveDataHdl/RScanVelocity/header/stamp
 
 ## Integration with Odometry Pipeline
 
+### Using Range and Noise Fields
+
+The `/mmWaveDataHdl/RScanVelocity` topic provides **7 fields** to support robust radar-inertial odometry:
+
+**Core Data (5 fields):**
+1. `x, y, z` - 3D Cartesian position
+2. `velocity` - Radial Doppler velocity
+3. `intensity` - SNR in dB
+
+**Added for Odometry (2 fields):**
+4. **`range`** - Pre-calculated distance `sqrt(x²+y²+z²)`
+   - Saves computation in your pipeline
+   - Useful for range-based filtering/weighting
+   - Needed for uncertainty scaling (farther = less accurate)
+
+5. **`noise`** - Measured noise floor in dB
+   - Combined with `intensity` (SNR) gives full signal quality
+   - **Essential for calculating measurement covariance**
+   - Enables adaptive weighting in sensor fusion
+
+### Calculating Measurement Uncertainty (for EKF/Optimization)
+
+The radar provides SNR and noise, which you can use to calculate measurement covariance based on Cramér-Rao Lower Bound:
+
+```cpp
+// Constants from your radar config
+const float c = 3e8;           // Speed of light (m/s)
+const float BW = 3.2e9;        // Bandwidth (Hz) - from profileCfg line 17
+const float fc = 62.3e9;       // Center freq (Hz) - from profileCfg line 17  
+const float lambda = c / fc;   // Wavelength: 0.0048 m
+const float T_frame = 0.0333;  // Frame time (s) - from frameCfg line 24
+const float d_antenna = 0.0022;// Antenna spacing (m) - typical for 6843AOP
+
+// From pointcloud
+float snr_db = intensity;      // SNR in dB
+float noise_db = noise;        // Noise floor in dB
+float snr_linear = pow(10.0f, snr_db / 10.0f);
+
+// Measurement standard deviations (Cramér-Rao bound)
+float sigma_range = c / (2.0f * BW * sqrt(2.0f * snr_linear));
+float sigma_velocity = lambda / (4.0f * M_PI * T_frame * sqrt(snr_linear));
+float sigma_azimuth = lambda / (2.0f * M_PI * d_antenna * sqrt(snr_linear));
+float sigma_elevation = lambda / (2.0f * M_PI * d_antenna * sqrt(snr_linear));
+
+// Add floor based on quantization limits
+sigma_range = std::max(sigma_range, 0.047f);      // Range resolution
+sigma_velocity = std::max(sigma_velocity, 0.604f); // Velocity resolution
+sigma_azimuth = std::max(sigma_azimuth, 0.01f);    // ~0.5 deg
+sigma_elevation = std::max(sigma_elevation, 0.01f);
+
+// Optional: Scale by range (far objects less accurate)
+float range_factor = 1.0f + (range / 10.0f) * 0.1f; // 10% per 10m
+sigma_azimuth *= range_factor;
+sigma_elevation *= range_factor;
+```
+
+**Why SNR-based weighting matters:**
+- 30 dB SNR → σ_range ≈ 1.6 cm, σ_velocity ≈ 0.2 m/s  ✅ High weight
+- 20 dB SNR → σ_range ≈ 5 cm, σ_velocity ≈ 0.7 m/s    → Medium weight
+- 10 dB SNR → σ_range ≈ 16 cm, σ_velocity ≈ 2.2 m/s   → Low weight
+
 ### Example: Reading Velocity Data
 ```cpp
 #include <sensor_msgs/PointCloud2.h>
@@ -192,27 +257,37 @@ rostopic echo /mmWaveDataHdl/RScanVelocity/header/stamp
 
 void velocityCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& msg)
 {
-    // Create iterators
+    // Create iterators for all 7 fields
     sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x");
     sensor_msgs::PointCloud2ConstIterator<float> iter_y(*msg, "y");
     sensor_msgs::PointCloud2ConstIterator<float> iter_z(*msg, "z");
     sensor_msgs::PointCloud2ConstIterator<float> iter_velocity(*msg, "velocity");
     sensor_msgs::PointCloud2ConstIterator<float> iter_intensity(*msg, "intensity");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_range(*msg, "range");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_noise(*msg, "noise");
     
-    // Use accurate arrival timestamp
+    // Use accurate arrival timestamp (captured at UART magic word)
     ros::Time data_time = msg->header.stamp;
     
     // Process each point
-    for(; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z, ++iter_velocity, ++iter_intensity)
+    for(; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z, ++iter_velocity, ++iter_intensity, ++iter_range, ++iter_noise)
     {
         float x = *iter_x;
         float y = *iter_y;
         float z = *iter_z;
-        float vel = *iter_velocity;  // Radial Doppler velocity
-        float snr = *iter_intensity;
+        float vel = *iter_velocity;  // Radial Doppler velocity (m/s)
+        float snr = *iter_intensity; // SNR in dB
+        float range = *iter_range;   // Pre-calculated distance
+        float noise = *iter_noise;   // Noise floor in dB
+        
+        // Calculate measurement covariance for sensor fusion
+        float snr_linear = pow(10.0f, snr / 10.0f);
+        float sigma_v = 0.0048f / (4.0f * M_PI * 0.0333f * sqrt(snr_linear));
         
         // Your odometry algorithm here
-        // Use vel for velocity updates
+        // Use vel for velocity constraint in optimization/EKF
+        // Use sigma_v for measurement weight (1/sigma_v²)
+        // Use data_time for accurate temporal association with IMU
         // Use data_time for accurate state estimation
     }
 }
