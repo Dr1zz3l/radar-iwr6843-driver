@@ -4,6 +4,25 @@ A ROS1-compatible driver for the IWR6843AOPEVM radar sensor, configured for prec
 
 ## Quick Start
 
+### USB Device Setup (One-Time)
+
+The radar requires USB serial access. The Docker setup handles this automatically, but if you encounter issues:
+
+**Option 1: Rebuild container (recommended)**
+```bash
+docker-compose -f docker/docker-compose.yml down
+docker-compose -f docker/docker-compose.yml up -d --build
+docker exec -it iwr6843-dev bash
+```
+
+**Option 2: Manual device setup (temporary)**
+```bash
+# Inside the container
+/workspace/scripts/setup_usb_devices.sh
+```
+
+### Running the Radar
+
 1. **Install Dev Containers extension in VS Code** (recommended)
 
 2. **Enable GUI support** (required after reboot):
@@ -20,12 +39,23 @@ A ROS1-compatible driver for the IWR6843AOPEVM radar sensor, configured for prec
 
 5. **Build and run**:
    ```bash
+   cd /workspace/mmwave_ti_ros/ros1_driver
    catkin_make
    source devel/setup.bash
-   roslaunch ti_mmwave_rospkg 6843_multi_3d_0.launch
+   
+   # Launch velocity publisher with RViz
+   roslaunch ti_mmwave_rospkg 6843AOP_velocity_3d.launch
+   
+   # Or launch headless for rosbag recording
+   roslaunch ti_mmwave_rospkg 6843AOP_velocity_3d_headless.launch
    ```
 
-See [Development Guide](docs/DEVELOPMENT.md) for detailed setup and workflow.
+6. **Record data** (in another terminal):
+   ```bash
+   rosbag record /mmWaveDataHdl/RScanVelocity /tf /tf_static
+   ```
+
+See [Velocity Publisher README](mmwave_ti_ros/ros1_driver/src/ti_mmwave_rospkg/VELOCITY_PUBLISHER_README.md) for detailed documentation.
 
 ## Project Structure
 

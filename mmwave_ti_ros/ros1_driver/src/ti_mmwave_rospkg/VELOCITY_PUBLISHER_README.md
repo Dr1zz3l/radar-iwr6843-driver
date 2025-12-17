@@ -767,6 +767,34 @@ rosbag record -O test.bag /mmWaveDataHdl/RScanVelocity
 
 ## Troubleshooting
 
+### USB Device Not Found (Docker Containers)
+
+If you get errors like `Failed to open User serial port` or `No such file or directory`:
+
+**Solution 1: Ensure radar is connected before starting container**
+```bash
+# On host machine
+lsusb | grep -i "Silicon Labs"
+# Should show: Bus XXX Device XXX: ID 10c4:ea70 Silicon Labs CP2105
+
+# Restart the container
+docker-compose -f docker/docker-compose.yml restart
+```
+
+**Solution 2: Manual device setup (temporary fix)**
+```bash
+# Inside the container
+/workspace/scripts/setup_usb_devices.sh
+```
+
+**Solution 3: Rebuild container**
+```bash
+# On host machine
+docker-compose -f docker/docker-compose.yml down
+docker-compose -f docker/docker-compose.yml up -d --build
+docker exec -it iwr6843-dev bash
+```
+
 ### No Data on Velocity Topic
 1. Check parameter: `rosparam get /radar_0/ti_mmwave/publish_velocity_cloud`
 2. Verify radar is detecting objects (move hand in front)

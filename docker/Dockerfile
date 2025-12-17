@@ -22,7 +22,12 @@ SHELL ["/bin/bash", "-c"]
 RUN echo "source /opt/ros/noetic/setup.bash" >> /root/.bashrc && \
     echo "source /root/catkin_ws/devel/setup.bash" >> /root/.bashrc
 
+# Add USB device setup script
+COPY scripts/setup_usb_devices.sh /usr/local/bin/setup_usb_devices.sh
+RUN chmod +x /usr/local/bin/setup_usb_devices.sh
+
 # Set working directory
 WORKDIR /root/catkin_ws
 
-CMD ["/bin/bash"]
+# Run USB setup on container start, then open bash
+CMD ["/bin/bash", "-c", "setup_usb_devices.sh || true && exec /bin/bash"]

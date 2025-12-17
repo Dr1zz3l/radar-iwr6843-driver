@@ -19,6 +19,9 @@ services:
     devices:
       # USB device access for radar
       - /dev/bus/usb:/dev/bus/usb
+      # TI mmWave radar serial ports (Silicon Labs CP2105 dual UART)
+      - /dev/ttyUSB0:/dev/ttyUSB0
+      - /dev/ttyUSB1:/dev/ttyUSB1
     network_mode: host  # Use host networking for ROS communication
     environment:
       - DISPLAY=${DISPLAY}
