@@ -792,16 +792,18 @@ void *DataUARTHandler::sortIncomingData( void )
                     velocity_cloud_msg.is_bigendian = false;
                     velocity_cloud_msg.is_dense = true;
                     
-                    // Define fields: x, y, z, velocity, intensity, range, noise
+                    // Define fields: x, y, z, velocity, intensity, range, noise, time_cpu_cycles, frame_number
                     sensor_msgs::PointCloud2Modifier modifier(velocity_cloud_msg);
-                    modifier.setPointCloud2Fields(7,
+                    modifier.setPointCloud2Fields(9,
                         "x", 1, sensor_msgs::PointField::FLOAT32,
                         "y", 1, sensor_msgs::PointField::FLOAT32,
                         "z", 1, sensor_msgs::PointField::FLOAT32,
                         "velocity", 1, sensor_msgs::PointField::FLOAT32,
                         "intensity", 1, sensor_msgs::PointField::FLOAT32,
                         "range", 1, sensor_msgs::PointField::FLOAT32,
-                        "noise", 1, sensor_msgs::PointField::FLOAT32);
+                        "noise", 1, sensor_msgs::PointField::FLOAT32,
+                        "time_cpu_cycles", 1, sensor_msgs::PointField::UINT32,
+                        "frame_number", 1, sensor_msgs::PointField::UINT32);
                     
                     modifier.resize(mmwData.numObjOut);
                     
@@ -813,9 +815,11 @@ void *DataUARTHandler::sortIncomingData( void )
                     sensor_msgs::PointCloud2Iterator<float> iter_intensity(velocity_cloud_msg, "intensity");
                     sensor_msgs::PointCloud2Iterator<float> iter_range(velocity_cloud_msg, "range");
                     sensor_msgs::PointCloud2Iterator<float> iter_noise(velocity_cloud_msg, "noise");
+                    sensor_msgs::PointCloud2Iterator<uint32_t> iter_time_cpu_cycles(velocity_cloud_msg, "time_cpu_cycles");
+                    sensor_msgs::PointCloud2Iterator<uint32_t> iter_frame_number(velocity_cloud_msg, "frame_number");
                     
                     // Populate the message with all detected points
-                    for (size_t i = 0; i < mmwData.numObjOut; ++i, ++iter_x, ++iter_y, ++iter_z, ++iter_velocity, ++iter_intensity, ++iter_range, ++iter_noise)
+                    for (size_t i = 0; i < mmwData.numObjOut; ++i, ++iter_x, ++iter_y, ++iter_z, ++iter_velocity, ++iter_intensity, ++iter_range, ++iter_noise, ++iter_time_cpu_cycles, ++iter_frame_number)
                     {
                         float x = RScan->points[i].x;
                         float y = RScan->points[i].y;
@@ -828,6 +832,8 @@ void *DataUARTHandler::sortIncomingData( void )
                         *iter_intensity = RScan->points[i].intensity;
                         *iter_range = sqrt(x*x + y*y + z*z);
                         *iter_noise = (i < noise_values.size()) ? noise_values[i] : 0.0f;
+                        *iter_time_cpu_cycles = mmwData.header.timeCpuCycles;
+                        *iter_frame_number = mmwData.header.frameNumber;
                     }
                     
                     velocity_cloud_pub.publish(velocity_cloud_msg);
