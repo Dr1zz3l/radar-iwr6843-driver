@@ -21,7 +21,7 @@
   },
   
   "remoteUser": "root",
-  "postCreateCommand": "echo 'source /opt/ros/noetic/setup.bash' >> ~/.bashrc && echo 'source /root/catkin_ws/devel/setup.bash 2>/dev/null || true' >> ~/.bashrc",
+  "postCreateCommand": "echo 'source /opt/ros/noetic/setup.bash' >> ~/.bashrc && echo 'source /workspace/mmwave_ti_ros/ros1_driver/devel/setup.bash 2>/dev/null || true' >> ~/.bashrc",
   "postStartCommand": "rosdep update || true",
   
   "mounts": [
