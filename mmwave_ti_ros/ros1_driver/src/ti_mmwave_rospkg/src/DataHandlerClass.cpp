@@ -65,7 +65,7 @@ DataUARTHandler::DataUARTHandler(ros::NodeHandle* nh) : currentBufp(&pingPongBuf
     {
         ros::Duration(0.1).sleep();
         timeout_counter++;
-        if(timeout_counter > 100) // 10 second timeout
+        if(timeout_counter > 200) // 20 second timeout (doubled for Jetson compatibility)
         {
             ROS_ERROR("DataUARTHandler: Timeout waiting for valid parameters!");
             ROS_ERROR("DataUARTHandler: Make sure mmWaveQuickConfig has completed successfully.");
