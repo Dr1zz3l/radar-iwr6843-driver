@@ -61,11 +61,24 @@ See [Velocity Publisher README](mmwave_ti_ros/ros1_driver/src/ti_mmwave_rospkg/V
 
 ```
 radar-iwr6843-driver/
-├── mmwave_ti_ros/          # TI driver submodule (the actual driver code)
-├── docker/                 # Docker environment setup
-├── scripts/                # Setup and helper scripts
-├── config/                 # Radar configuration files
-└── .devcontainer/          # VS Code dev container config
+├── mmwave_ti_ros/
+│   ├── ros1_driver/              # ROS1 driver (main focus)
+│   ├── ros2_driver/              # ROS2 driver (CATKIN_IGNORE added)
+│   └── autonomous_robotics_ros/  # Robotics demos (CATKIN_IGNORE added)
+├── docker/                       # Docker environment setup
+├── scripts/                      # Setup and helper scripts
+├── config/                       # Radar configuration files
+└── .devcontainer/                # VS Code dev container config
+```
+
+### Multi-Workspace Setup
+
+If you've cloned this repo into a workspace with other packages, the `CATKIN_IGNORE` files will prevent catkin from building the ROS2 driver and autonomous robotics demos. Only `mmwave_ti_ros/ros1_driver/` will be built.
+
+**To build in a multi-package workspace:**
+```bash
+cd ~/your_catkin_ws
+catkin_make  # Only builds ros1_driver, skips ros2_driver and autonomous_robotics_ros
 ```
 
 ## Features
