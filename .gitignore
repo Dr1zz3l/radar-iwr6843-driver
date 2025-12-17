@@ -6,6 +6,15 @@ mmwave_ti_ros/ros2_driver/build/
 mmwave_ti_ros/ros2_driver/install/
 mmwave_ti_ros/ros2_driver/log/
 
+# Radar odometry workspace build artifacts
+radar_odometry/build/
+radar_odometry/devel/
+radar_odometry/.catkin_workspace
+
+# Analysis artifacts
+analysis/data/
+analysis/.ipynb_checkpoints/
+
 # IDE files
 .vscode/
 .idea/
