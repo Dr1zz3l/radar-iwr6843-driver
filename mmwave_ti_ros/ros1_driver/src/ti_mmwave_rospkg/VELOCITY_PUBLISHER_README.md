@@ -8,8 +8,11 @@ cd /workspace/mmwave_ti_ros/ros1_driver
 catkin_make
 source devel/setup.bash
 
-# Launch with velocity publisher
+# Launch with velocity publisher + RViz (for testing)
 roslaunch ti_mmwave_rospkg 6843AOP_velocity_3d.launch
+
+# Launch headless for drone/rosbag data capture (no RViz)
+roslaunch ti_mmwave_rospkg 6843AOP_velocity_3d_headless.launch
 
 # Or see all 5 publishers simultaneously
 roslaunch ti_mmwave_rospkg 6843AOP_all_publishers_3d.launch
@@ -19,6 +22,19 @@ roslaunch ti_mmwave_rospkg 6843AOP_all_publishers_3d.launch
 **Fields:** `x, y, z, velocity, intensity, range, noise` (7 float32 fields)  
 **Rate:** ~30 Hz (33ms frame period)  
 **Timestamp:** Captured at UART arrival (<0.1ms latency)
+
+### Recording Data with rosbag
+
+```bash
+# Start the radar (headless mode)
+roslaunch ti_mmwave_rospkg 6843AOP_velocity_3d_headless.launch
+
+# In another terminal, record velocity data
+rosbag record /mmWaveDataHdl/RScanVelocity /tf /tf_static
+
+# Or record all radar topics
+rosbag record -a /mmWaveDataHdl/RScanVelocity /ti_mmwave/radar_scan_pcl_0 /ti_mmwave/radar_scan /tf /tf_static
+```
 
 ## Overview
 This modification adds a new PointCloud2 publisher specifically designed for high-speed UAV radar-inertial odometry applications. The new publisher provides accurate Doppler velocity data with precise timestamping while maintaining full backward compatibility with existing TI mmWave demos.
