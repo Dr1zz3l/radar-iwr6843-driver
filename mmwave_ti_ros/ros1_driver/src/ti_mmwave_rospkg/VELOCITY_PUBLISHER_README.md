@@ -1,5 +1,25 @@
 # Velocity-Focused PointCloud2 Publisher for Radar-Inertial Odometry
 
+## Quick Start
+
+```bash
+# Build the package
+cd /workspace/mmwave_ti_ros/ros1_driver
+catkin_make
+source devel/setup.bash
+
+# Launch with velocity publisher
+roslaunch ti_mmwave_rospkg 6843AOP_velocity_3d.launch
+
+# Or see all 5 publishers simultaneously
+roslaunch ti_mmwave_rospkg 6843AOP_all_publishers_3d.launch
+```
+
+**Topic:** `/mmWaveDataHdl/RScanVelocity` (sensor_msgs::PointCloud2)  
+**Fields:** `x, y, z, velocity, intensity, range, noise` (7 float32 fields)  
+**Rate:** ~30 Hz (33ms frame period)  
+**Timestamp:** Captured at UART arrival (<0.1ms latency)
+
 ## Overview
 This modification adds a new PointCloud2 publisher specifically designed for high-speed UAV radar-inertial odometry applications. The new publisher provides accurate Doppler velocity data with precise timestamping while maintaining full backward compatibility with existing TI mmWave demos.
 
