@@ -5,9 +5,8 @@ matplotlib>=3.7.0
 seaborn>=0.12.0
 
 # ROS bag processing
-rosbag
-rospkg
-rospy
+# Note: rosbag, rospkg, rospy are provided by ROS installation
+# They should be accessed by sourcing ROS: source /opt/ros/noetic/setup.bash
 
 # Jupyter
 jupyter>=1.0.0

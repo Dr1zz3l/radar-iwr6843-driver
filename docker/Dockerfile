@@ -8,7 +8,13 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     python3-catkin-tools \
     python3-rosdep \
+    python3-pip \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install uv for faster Python package management
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Create catkin workspace structure
 RUN mkdir -p /root/catkin_ws/src
