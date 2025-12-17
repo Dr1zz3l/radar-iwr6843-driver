@@ -811,6 +811,153 @@ docker exec -it iwr6843-dev bash
 
 ## Technical Details
 
+### Original Driver Data Processing Pipeline
+
+The TI mmWave driver performs several processing steps between receiving raw sensor data and publishing ROS messages:
+
+#### 1. UART Reception & Buffer Management
+```
+UART IRQ → Read bytes → Buffer A/B swap → Magic word detection (0x0102030405060708)
+```
+- Double-buffered design: one buffer receives while the other is parsed
+- Thread-safe buffer swapping using mutex
+
+#### 2. TLV (Type-Length-Value) Parsing
+The radar sends structured packets with multiple sections:
+- **Header**: frameNumber, timeCpuCycles, numDetectedObj, totalPacketLen
+- **TLV Sections** (parsed sequentially):
+  - **Detected Objects** (TLV type 1): x, y, z, velocity per point
+  - **Side Info** (TLV type 7): SNR and noise per point (SDK 3.x+)
+  - **Occupancy** (TLV type 9): Binary zone status
+  - **Other TLVs**: Range profile, azimuth, doppler (skipped in this config)
+
+#### 3. Coordinate Transformation (Original Publishers Only)
+**Sensor frame → ROS standard frame:**
+```cpp
+// Original transformation (radar_scan_pcl_0)
+ROS_X = Sensor_Y    // Forward
+ROS_Y = -Sensor_X   // Left  
+ROS_Z = Sensor_Z    // Up
+```
+
+**Why this matters:**
+- Makes pointcloud compatible with ROS REP-103 standard
+- Allows use with standard ROS navigation/mapping tools
+- **NEW velocity publisher uses raw sensor frame** (no transformation)
+
+#### 4. Angle Filtering (Original Publishers Only)
+Points are filtered based on elevation and azimuth limits:
+```cpp
+// From launch parameters (default: 90° both)
+max_allowed_elevation_angle_deg: 90
+max_allowed_azimuth_angle_deg: 90
+
+// Filter calculation (ROS coordinates)
+elevation_angle² = z² / (x² + y²)
+azimuth_ratio = |y / x|
+
+// Keep point if:
+if (elevation_angle² < max_elevation² && azimuth_ratio < max_azimuth)
+    publish_point();
+```
+
+**Impact:**
+- Removes points at extreme angles (often multipath/noise)
+- Can reduce point count by 10-30% depending on scene
+- **NEW velocity publisher: NO filtering** (all points published)
+
+#### 5. Intensity Calculation
+Different methods depending on SDK version:
+
+**SDK < 3.x:**
+```cpp
+intensity = 10 * log10(peakVal + 1)  // Convert peak to dB
+```
+
+**SDK ≥ 3.x:**
+```cpp
+intensity = snr / 10.0  // Use SNR from side info (already in 0.1dB units)
+```
+
+#### 6. Velocity Calculation
+
+**SDK < 3.x (index-based):**
+```cpp
+doppler_index = signed_int16 from TLV
+velocity = doppler_index * doppler_velocity_resolution
+```
+Where `doppler_velocity_resolution` is calculated from radar config:
+```
+λ = c / center_frequency
+v_res = λ / (2 * frame_time * num_chirps)
+```
+
+**SDK ≥ 3.x (direct):**
+```cpp
+velocity = float from TLV  // Direct m/s value
+```
+
+#### 7. Publishing to Multiple Topics
+
+**Original driver publishes 5 topics simultaneously:**
+
+| Step | Topic | Processing Applied |
+|------|-------|-------------------|
+| 1 | `/ti_mmwave/radar_scan` | Per-point message, coordinate transform, angle filter |
+| 2 | `/ti_mmwave/radar_scan_pcl_0` | PCL PointCloud2, coordinate transform, angle filter, timestamp AFTER processing |
+| 3 | `/ti_mmwave/radar_scan_markers` | Visualization markers with temporal decay |
+| 4 | `/ti_mmwave/radar_occupancy` | Binary zone status (0=clear, non-zero=occupied) |
+| 5 | `/mmWaveDataHdl/RScanVelocity` | **NEW**: Raw sensor frame, no filtering, timestamp at arrival |
+
+#### Processing Time Budget
+
+```
+Component                    Latency
+─────────────────────────────────────
+UART transmission           ~1-2ms
+Buffer swap                 ~0.1ms
+TLV parsing                 ~0.5-1ms
+Coordinate transform        ~0.2ms
+Angle filtering             ~0.5-1ms
+PCL pointcloud creation     ~0.5-1ms
+ROS message publishing      ~0.1-0.3ms
+─────────────────────────────────────
+TOTAL (original pipeline)   ~3-6ms
+```
+
+**Where timestamps are captured:**
+- **Original**: After all processing (~3-6ms latency)
+- **NEW velocity cloud**: At magic word detection (~0.1ms latency)
+
+#### Memory Layout
+
+**mmWaveCloudType (PCL custom type):**
+```cpp
+struct {
+    PCL_ADD_POINT4D;          // x, y, z, padding (16 bytes)
+    float velocity;           // 4 bytes
+    float intensity;          // 4 bytes
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+} EIGEN_ALIGN16;
+// Total: 24 bytes per point
+```
+
+**Velocity PointCloud2 (standard ROS message):**
+```cpp
+fields = [
+    x, y, z,                  // 12 bytes (3×float32)
+    velocity, intensity,      // 8 bytes (2×float32)
+    range, noise,             // 8 bytes (2×float32)
+    time_cpu_cycles,          // 4 bytes (uint32)
+    frame_number              // 4 bytes (uint32)
+]
+// Total: 36 bytes per point
+```
+
+**Bandwidth comparison (50 points @ 30 Hz):**
+- Original PCL: 50 × 24 bytes × 30 Hz = 36 KB/s
+- Velocity cloud: 50 × 36 bytes × 30 Hz = 54 KB/s (+50% but adds critical timing data)
+
 ### Coordinate System
 - **X**: Forward (radar Y-axis)
 - **Y**: Left (negative radar X-axis)  
