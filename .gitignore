@@ -18,6 +18,7 @@ analysis/.ipynb_checkpoints/
 # IDE files
 .vscode/
 .idea/
+.venv/
 *.swp
 
 # Logs
