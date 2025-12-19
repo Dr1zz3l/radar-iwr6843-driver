@@ -21,11 +21,12 @@
   },
   
   "remoteUser": "root",
-  "postCreateCommand": "echo 'source /opt/ros/noetic/setup.bash' >> ~/.bashrc && echo 'source /workspace/mmwave_ti_ros/ros1_driver/devel/setup.bash 2>/dev/null || true' >> ~/.bashrc",
-  "postStartCommand": "rosdep update || true",
+  "postCreateCommand": "chmod 700 ~/.ssh && chmod 600 ~/.ssh/* && echo 'source /opt/ros/noetic/setup.bash' >> ~/.bashrc && echo 'source /workspace/mmwave_ti_ros/ros1_driver/devel/setup.bash 2>/dev/null || true' >> ~/.bashrc",
+  "postStartCommand": "chmod 700 ~/.ssh && chmod 600 ~/.ssh/* 2>/dev/null || true && rosdep update || true",
   
   "mounts": [
-    "source=/dev/bus/usb,target=/dev/bus/usb,type=bind"
+    "source=/dev/bus/usb,target=/dev/bus/usb,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/root/.ssh,type=bind,readonly"
   ],
   
   "runArgs": [
