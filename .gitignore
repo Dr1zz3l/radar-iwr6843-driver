@@ -24,3 +24,5 @@ analysis/.ipynb_checkpoints/
 # Logs
 *.log
 rosbags/
+
+*.pyc
