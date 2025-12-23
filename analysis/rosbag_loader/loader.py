@@ -1,7 +1,7 @@
 """ROS bag loading and inspection utilities."""
 
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
 
 try:
@@ -9,6 +9,12 @@ try:
     HAS_ROSBAG = True
 except ImportError:
     HAS_ROSBAG = False
+
+try:
+    from scipy.stats import linregress
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
 
 from .structures import (
     MocapPose,
@@ -73,6 +79,225 @@ def inspect_bag_topics(bag_path: str) -> Dict[str, Any]:
         bag.close()
     
     return topics_info
+
+
+def stitch_cpu_counter_resets(
+    radar_frames: List[Any],
+    verbose: bool = False,
+    gap_threshold_billion: float = 0.5,
+) -> Tuple[List[Any], Dict[str, Any]]:
+    """Detect and correct CPU counter resets in radar data.
+    
+    The radar CPU counter can reset during data collection (e.g., 32-bit overflow).
+    This function detects reset events by analyzing the CPU cycles vs ROS time relationship
+    to identify discontinuous segments, then stitches them together.
+    
+    Note: ROS bag data is chronologically sorted, so we look for two-cluster patterns
+    in the CPU vs time scatter plot rather than monotonicity violations.
+    
+    Args:
+        radar_frames: List of RadarVelocity or RadarPointCloud objects
+        verbose: Print diagnostic information
+        gap_threshold_billion: Threshold in billions of cycles to detect gaps
+        
+    Returns:
+        Tuple of (corrected_frames, diagnostics_dict)
+        - corrected_frames: New list with corrected CPU cycles
+        - diagnostics_dict: Contains reset detection info and fit quality
+    """
+    if not HAS_SCIPY:
+        if verbose:
+            print("⚠️  scipy not available - skipping CPU counter reset correction")
+        return radar_frames, {"enabled": False}
+    
+    if len(radar_frames) == 0:
+        return radar_frames, {"enabled": False, "reason": "no_data"}
+    
+    # Extract CPU cycles and ROS timestamps
+    cpu_cycles = []
+    ros_times = []
+    valid_indices = []
+    
+    for idx, frame in enumerate(radar_frames):
+        if frame.time_cpu_cycles is not None and len(frame.time_cpu_cycles) > 0:
+            cpu_cycles.append(frame.time_cpu_cycles[0])
+            ros_times.append(frame.timestamp)
+            valid_indices.append(idx)
+    
+    if len(cpu_cycles) < 20:
+        if verbose:
+            print("⚠️  Not enough frames with CPU cycles for reset detection")
+        return radar_frames, {"enabled": False, "reason": "insufficient_data"}
+    
+    cpu_cycles = np.array(cpu_cycles)
+    ros_times = np.array(ros_times)
+    
+    # Detect resets by analyzing CPU cycle distribution
+    # After reading from bag (sorted by time), a reset creates a gap in CPU cycles
+    cpu_min, cpu_max = cpu_cycles.min(), cpu_cycles.max()
+    cpu_range = cpu_max - cpu_min
+    
+    if cpu_range < gap_threshold_billion * 1e9:
+        # No significant range, unlikely to have resets
+        if verbose:
+            print(f"✓ CPU counter appears continuous (range: {cpu_range/1e9:.3f}B)")
+        return radar_frames, {
+            "enabled": True,
+            "resets_detected": False,
+            "cpu_range_billion": cpu_range/1e9,
+        }
+    
+    # Use histogram to find gaps in CPU cycle distribution
+    cpu_bins = 20
+    hist, bin_edges = np.histogram(cpu_cycles, bins=cpu_bins)
+    
+    # Find gaps (bins with zero counts)
+    gap_mask = hist == 0
+    gap_indices = np.where(gap_mask)[0]
+    
+    if len(gap_indices) == 0:
+        if verbose:
+            print(f"✓ No gaps detected in CPU cycle distribution")
+        return radar_frames, {
+            "enabled": True,
+            "resets_detected": False,
+            "cpu_range_billion": cpu_range/1e9,
+        }
+    
+    # Find the largest contiguous gap to use as split point
+    largest_gap_idx = gap_indices[0]
+    for i in range(len(gap_indices) - 1):
+        if gap_indices[i+1] != gap_indices[i] + 1:
+            break
+        largest_gap_idx = gap_indices[i+1]
+    
+    gap_boundary = bin_edges[largest_gap_idx + 1]
+    
+    if verbose:
+        print(f"\n⚠️  CPU counter reset detected!")
+        print(f"  Split boundary: {gap_boundary/1e9:.3f}B cycles")
+    
+    # Split data into two segments
+    seg1_mask = cpu_cycles < gap_boundary
+    seg2_mask = cpu_cycles >= gap_boundary
+    
+    seg1_cpu = cpu_cycles[seg1_mask]
+    seg1_ros = ros_times[seg1_mask]
+    seg1_indices = np.array(valid_indices)[seg1_mask]
+    
+    seg2_cpu = cpu_cycles[seg2_mask]
+    seg2_ros = ros_times[seg2_mask]
+    seg2_indices = np.array(valid_indices)[seg2_mask]
+    
+    if len(seg1_cpu) < 5 or len(seg2_cpu) < 5:
+        if verbose:
+            print(f"⚠️  Segments too small for stitching (n1={len(seg1_cpu)}, n2={len(seg2_cpu)})")
+        return radar_frames, {
+            "enabled": True,
+            "resets_detected": True,
+            "stitching_failed": "segments_too_small",
+        }
+    
+    # Fit each segment to verify clock consistency
+    slope1, int1, r1, _, _ = linregress(seg1_cpu, seg1_ros)
+    slope2, int2, r2, _, _ = linregress(seg2_cpu, seg2_ros)
+    
+    if verbose:
+        print(f"  Segment 1: {len(seg1_cpu)} frames, R²={r1**2:.6f}, {1.0/slope1/1e6:.2f} MHz")
+        print(f"  Segment 2: {len(seg2_cpu)} frames, R²={r2**2:.6f}, {1.0/slope2/1e6:.2f} MHz")
+    
+    # Determine chronological order (data is already sorted by ROS time)
+    if seg2_ros[0] < seg1_ros[0]:
+        # Segment 2 comes first
+        first_cpu, first_ros, first_indices = seg2_cpu, seg2_ros, seg2_indices
+        second_cpu, second_ros, second_indices = seg1_cpu, seg1_ros, seg1_indices
+        first_slope = slope2
+    else:
+        # Segment 1 comes first
+        first_cpu, first_ros, first_indices = seg1_cpu, seg1_ros, seg1_indices
+        second_cpu, second_ros, second_indices = seg2_cpu, seg2_ros, seg2_indices
+        first_slope = slope1
+    
+    # Calculate offset to stitch segments
+    cpu_offset = first_cpu[-1]
+    ros_gap = second_ros[0] - first_ros[-1]
+    estimated_gap_cycles = ros_gap / first_slope
+    total_offset = cpu_offset + estimated_gap_cycles
+    
+    if verbose:
+        print(f"  Stitching: offset={total_offset/1e9:.3f}B, gap={ros_gap*1000:.1f}ms")
+    
+    # Create corrected frames
+    corrected_frames = []
+    second_index_set = set(second_indices)
+    
+    for idx, frame in enumerate(radar_frames):
+        if idx in second_index_set:
+            # This frame needs CPU cycle correction
+            if frame.time_cpu_cycles is not None and len(frame.time_cpu_cycles) > 0:
+                corrected_cycles = [c + total_offset for c in frame.time_cpu_cycles]
+                # Create new frame with corrected cycles
+                if isinstance(frame, RadarVelocity):
+                    new_frame = RadarVelocity(
+                        timestamp=frame.timestamp,
+                        positions=frame.positions,
+                        velocities=frame.velocities,
+                        intensities=frame.intensities,
+                        ranges=frame.ranges,
+                        noise=frame.noise,
+                        time_cpu_cycles=corrected_cycles,
+                        frame_number=frame.frame_number,
+                    )
+                elif isinstance(frame, RadarPointCloud):
+                    new_frame = RadarPointCloud(
+                        timestamp=frame.timestamp,
+                        positions=frame.positions,
+                        velocities=frame.velocities,
+                        intensities=frame.intensities,
+                        ranges=frame.ranges,
+                        noise=frame.noise,
+                        time_cpu_cycles=corrected_cycles,
+                        frame_number=frame.frame_number,
+                    )
+                else:
+                    new_frame = frame
+                corrected_frames.append(new_frame)
+            else:
+                corrected_frames.append(frame)
+        else:
+            # No correction needed
+            corrected_frames.append(frame)
+    
+    # Verify stitching quality
+    cpu_stitched = np.array([
+        f.time_cpu_cycles[0] for f in corrected_frames
+        if f.time_cpu_cycles is not None and len(f.time_cpu_cycles) > 0
+    ])
+    ros_stitched = np.array([
+        f.timestamp for f in corrected_frames
+        if f.time_cpu_cycles is not None and len(f.time_cpu_cycles) > 0
+    ])
+    
+    slope_stitched, int_stitched, r_stitched, _, _ = linregress(cpu_stitched, ros_stitched)
+    
+    if verbose:
+        print(f"  Result: R²={r_stitched**2:.6f}, clock={1.0/slope_stitched/1e6:.2f} MHz")
+        print(f"  ✓ CPU counter reset corrected successfully\n")
+    
+    diagnostics = {
+        "enabled": True,
+        "resets_detected": True,
+        "num_segments": 2,
+        "segment1_size": len(first_cpu),
+        "segment2_size": len(second_cpu),
+        "gap_boundary_billion": gap_boundary/1e9,
+        "total_offset_billion": total_offset/1e9,
+        "r_squared_before": [r1**2, r2**2],
+        "r_squared_after": r_stitched**2,
+        "clock_freq_mhz": 1.0/slope_stitched/1e6,
+    }
+    
+    return corrected_frames, diagnostics
 
 
 def _extract_position_and_orientation(pose_msg) -> tuple[np.ndarray, np.ndarray]:

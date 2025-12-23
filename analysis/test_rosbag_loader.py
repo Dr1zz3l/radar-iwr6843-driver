@@ -15,6 +15,7 @@ def test_imports():
         from rosbag_loader import (
             load_bag_topics,
             inspect_bag_topics,
+            stitch_cpu_counter_resets,
             MocapPose,
             MocapAccel,
             AgirosState,
@@ -24,7 +25,7 @@ def test_imports():
             RadarVelocity,
             BagData,
         )
-        print("✓ All imports successful")
+        print("✓ All imports successful (including stitch_cpu_counter_resets)")
         return True
     except ImportError as e:
         print(f"✗ Import error: {e}")
