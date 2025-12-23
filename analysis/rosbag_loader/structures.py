@@ -30,31 +30,41 @@ class MocapPose:
 
 @dataclass
 class MocapAccel:
-    """Mocap acceleration data from /mocap/angrybird2/accel.
+    """Mocap twist data from /mocap/angrybird2/accel.
     
-    Note: Contains jumps in position data.
+    WARNING: Despite the topic name 'accel', this is actually TwistStamped message
+    containing linear and angular VELOCITY, not acceleration.
+    Contains jumps in position data.
     """
 
     timestamp: float  # seconds since epoch
-    linear_acceleration: np.ndarray  # [ax, ay, az] in m/s^2
-    frame_id: str = "mocap"
-    child_frame_id: str = "angrybird2"
+    linear_acceleration: np.ndarray  # [vx, vy, vz] in m/s - ACTUALLY VELOCITY!
+    angular_velocity: Optional[np.ndarray] = None  # [wx, wy, wz] in rad/s
+    frame_id: str = "world"
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             "timestamp": self.timestamp,
-            "ax": self.linear_acceleration[0],
-            "ay": self.linear_acceleration[1],
-            "az": self.linear_acceleration[2],
+            "vx": self.linear_acceleration[0],  # Actually velocity
+            "vy": self.linear_acceleration[1],
+            "vz": self.linear_acceleration[2],
         }
+        if self.angular_velocity is not None:
+            data.update({
+                "wx": self.angular_velocity[0],
+                "wy": self.angular_velocity[1],
+                "wz": self.angular_velocity[2],
+            })
+        return data
 
 
 @dataclass
 class AgirosState:
     """State estimation from Agiros pilot (Kalman smoothed MoCap).
     
-    Source: /angrybird2/agiros_pilot/state
+    Source: /angrybird2/agiros_pilot/state (QuadState message)
     Quality: Better than odometry, higher resolution.
+    Contains full state including acceleration, jerk, snap, and bias estimates.
     """
 
     timestamp: float
@@ -62,11 +72,18 @@ class AgirosState:
     velocity: np.ndarray  # [vx, vy, vz]
     orientation: np.ndarray  # [qx, qy, qz, qw]
     angular_velocity: np.ndarray  # [wx, wy, wz]
+    acceleration: Optional[np.ndarray] = None  # [ax, ay, az] linear acceleration
+    angular_acceleration: Optional[np.ndarray] = None  # [alpha_x, alpha_y, alpha_z]
+    jerk: Optional[np.ndarray] = None  # [jx, jy, jz] derivative of acceleration
+    snap: Optional[np.ndarray] = None  # [sx, sy, sz] derivative of jerk
+    acc_bias: Optional[np.ndarray] = None  # [bx, by, bz] accelerometer bias
+    gyr_bias: Optional[np.ndarray] = None  # [bx, by, bz] gyroscope bias
+    motors: Optional[np.ndarray] = None  # [m1, m2, m3, m4] motor commands
     frame_id: str = "world"
     child_frame_id: str = "angrybird2"
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             "timestamp": self.timestamp,
             "x": self.position[0],
             "y": self.position[1],
@@ -82,6 +99,11 @@ class AgirosState:
             "wy": self.angular_velocity[1],
             "wz": self.angular_velocity[2],
         }
+        if self.acceleration is not None:
+            data.update({"ax": self.acceleration[0], "ay": self.acceleration[1], "az": self.acceleration[2]})
+        if self.motors is not None and len(self.motors) >= 4:
+            data.update({"motor1": self.motors[0], "motor2": self.motors[1], "motor3": self.motors[2], "motor4": self.motors[3]})
+        return data
 
 
 @dataclass

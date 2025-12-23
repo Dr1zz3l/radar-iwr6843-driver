@@ -262,10 +262,12 @@ def load_bag_topics(bag_path: str, verbose: bool = True) -> BagData:
             try:
                 # Note: Despite the topic name "accel", this is actually TwistStamped
                 # containing linear and angular velocity
-                accel = _extract_vector3(msg.twist.linear)
+                linear_vel = _extract_vector3(msg.twist.linear)
+                angular_vel = _extract_vector3(msg.twist.angular)
                 mocap_accel_list.append(MocapAccel(
                     timestamp=t.to_sec(),
-                    linear_acceleration=accel,  # Actually velocity data
+                    linear_acceleration=linear_vel,  # Actually velocity data
+                    angular_velocity=angular_vel,
                 ))
             except Exception as e:
                 if verbose:
@@ -281,12 +283,28 @@ def load_bag_topics(bag_path: str, verbose: bool = True) -> BagData:
                 vel = _extract_vector3(msg.velocity.linear)
                 ang_vel = _extract_vector3(msg.velocity.angular)
                 
+                # Extract optional fields from QuadState message
+                accel = _extract_vector3(msg.acceleration.linear) if hasattr(msg, 'acceleration') else None
+                ang_accel = _extract_vector3(msg.acceleration.angular) if hasattr(msg, 'acceleration') and hasattr(msg.acceleration, 'angular') else None
+                jerk = _extract_vector3(msg.jerk) if hasattr(msg, 'jerk') else None
+                snap = _extract_vector3(msg.snap) if hasattr(msg, 'snap') else None
+                acc_bias = _extract_vector3(msg.acc_bias) if hasattr(msg, 'acc_bias') else None
+                gyr_bias = _extract_vector3(msg.gyr_bias) if hasattr(msg, 'gyr_bias') else None
+                motors = np.array(msg.motors) if hasattr(msg, 'motors') and len(msg.motors) > 0 else None
+                
                 agiros_state_list.append(AgirosState(
                     timestamp=t.to_sec(),
                     position=pos,
                     velocity=vel,
                     orientation=ori,
                     angular_velocity=ang_vel,
+                    acceleration=accel,
+                    angular_acceleration=ang_accel,
+                    jerk=jerk,
+                    snap=snap,
+                    acc_bias=acc_bias,
+                    gyr_bias=gyr_bias,
+                    motors=motors,
                 ))
             except Exception as e:
                 if verbose:
@@ -320,7 +338,13 @@ def load_bag_topics(bag_path: str, verbose: bool = True) -> BagData:
             try:
                 accel = _extract_vector3(msg.linear_acceleration)
                 ang_vel = _extract_vector3(msg.angular_velocity)
-                ori = _extract_quaternion(msg.orientation) if hasattr(msg, 'orientation') else None
+                # Note: msg.orientation exists but contains NaN values in this dataset
+                # Only extract if valid (not NaN)
+                ori = None
+                if hasattr(msg, 'orientation'):
+                    quat = _extract_quaternion(msg.orientation)
+                    if not np.any(np.isnan(quat)):
+                        ori = quat
                 
                 imu_list.append(IMUData(
                     timestamp=t.to_sec(),
@@ -375,8 +399,6 @@ def load_bag_topics(bag_path: str, verbose: bool = True) -> BagData:
                         frame_number=frame_number,
                     ))
             except Exception as e:
-                if verbose:
-                    print(f"    Error parsing message: {e}")
                 if verbose:
                     print(f"    Error parsing message: {e}")
         
