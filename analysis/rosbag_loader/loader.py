@@ -228,42 +228,64 @@ def stitch_cpu_counter_resets(
         print(f"  Stitching: offset={total_offset/1e9:.3f}B, gap={ros_gap*1000:.1f}ms")
     
     # Create corrected frames
+    # Build mapping from original valid_indices to segment membership
+    valid_to_segment = {}
+    for vidx in first_indices:
+        valid_to_segment[vidx] = 'first'
+    for vidx in second_indices:
+        valid_to_segment[vidx] = 'second'
+    
+    # Safety check: all valid indices should be classified
+    if len(valid_to_segment) != len(valid_indices):
+        if verbose:
+            print(f"⚠️  Warning: {len(valid_indices)} valid frames but {len(valid_to_segment)} classified")
+    
     corrected_frames = []
-    second_index_set = set(second_indices)
+    valid_idx_counter = 0
     
     for idx, frame in enumerate(radar_frames):
-        if idx in second_index_set:
-            # This frame needs CPU cycle correction
-            if frame.time_cpu_cycles is not None and len(frame.time_cpu_cycles) > 0:
-                corrected_cycles = [c + total_offset for c in frame.time_cpu_cycles]
-                # Create new frame with corrected cycles
-                if isinstance(frame, RadarVelocity):
-                    new_frame = RadarVelocity(
-                        timestamp=frame.timestamp,
-                        positions=frame.positions,
-                        velocities=frame.velocities,
-                        intensities=frame.intensities,
-                        ranges=frame.ranges,
-                        noise=frame.noise,
-                        time_cpu_cycles=corrected_cycles,
-                        frame_number=frame.frame_number,
-                    )
-                elif isinstance(frame, RadarPointCloud):
-                    new_frame = RadarPointCloud(
-                        timestamp=frame.timestamp,
-                        positions=frame.positions,
-                        velocities=frame.velocities,
-                        intensities=frame.intensities,
-                        ranges=frame.ranges,
-                        noise=frame.noise,
-                        time_cpu_cycles=corrected_cycles,
-                        frame_number=frame.frame_number,
-                    )
-                else:
-                    new_frame = frame
-                corrected_frames.append(new_frame)
+        has_cpu = frame.time_cpu_cycles is not None and len(frame.time_cpu_cycles) > 0
+        
+        # Determine if this frame needs correction
+        needs_correction = False
+        if has_cpu and valid_idx_counter < len(valid_indices):
+            if valid_indices[valid_idx_counter] == idx:
+                # This is a valid frame - check which segment
+                segment = valid_to_segment.get(idx)
+                if segment is None:
+                    raise ValueError(f"Frame {idx} has CPU cycles but not classified into any segment")
+                needs_correction = (segment == 'second')
+                valid_idx_counter += 1
+        
+        if needs_correction and has_cpu:
+            # Apply offset to second segment
+            corrected_cycles = [c + total_offset for c in frame.time_cpu_cycles]
+            # Create new frame with corrected cycles
+            if isinstance(frame, RadarVelocity):
+                new_frame = RadarVelocity(
+                    timestamp=frame.timestamp,
+                    positions=frame.positions,
+                    velocities=frame.velocities,
+                    intensities=frame.intensities,
+                    ranges=frame.ranges,
+                    noise=frame.noise,
+                    time_cpu_cycles=corrected_cycles,
+                    frame_number=frame.frame_number,
+                )
+            elif isinstance(frame, RadarPointCloud):
+                new_frame = RadarPointCloud(
+                    timestamp=frame.timestamp,
+                    positions=frame.positions,
+                    velocities=frame.velocities,
+                    intensities=frame.intensities,
+                    ranges=frame.ranges,
+                    noise=frame.noise,
+                    time_cpu_cycles=corrected_cycles,
+                    frame_number=frame.frame_number,
+                )
             else:
-                corrected_frames.append(frame)
+                new_frame = frame
+            corrected_frames.append(new_frame)
         else:
             # No correction needed
             corrected_frames.append(frame)
@@ -287,7 +309,8 @@ def stitch_cpu_counter_resets(
     diagnostics = {
         "enabled": True,
         "resets_detected": True,
-        "num_segments": 2,
+        # Note: Current implementation only handles single reset (2 segments)
+        # Multiple resets would require iterative gap detection
         "segment1_size": len(first_cpu),
         "segment2_size": len(second_cpu),
         "gap_boundary_billion": gap_boundary/1e9,
