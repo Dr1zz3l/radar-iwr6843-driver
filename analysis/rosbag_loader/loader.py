@@ -3,6 +3,10 @@
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
+from scipy.stats import linregress
+from copy import copy
+import dataclasses
+
 
 try:
     import rosbag
@@ -322,6 +326,235 @@ def stitch_cpu_counter_resets(
     
     return corrected_frames, diagnostics
 
+def stitch_cpu_counter_resets_improved(
+    radar_frames: List[Any],
+    verbose: bool = False,
+    use_clustering: bool = True,
+    reset_drop_threshold: float = -1e9,  # A drop of >1 billion cycles implies a reset
+) -> Tuple[List[Any], Dict[str, Any]]:
+    """
+    Robustly stitches an arbitrary number of CPU counter resets (N-resets).
+    
+    Algorithm:
+    1. Detects resets using clustering (DBSCAN) or derivatives
+    2. Iterates through segments defined by these resets
+    3. For each gap, calculates the expected CPU cycle jump based on ROS timestamp gap
+    4. Accumulates a running offset to stitch segments into a single linear timeline
+    
+    Args:
+        radar_frames: List of radar frame objects
+        verbose: Print diagnostic information
+        use_clustering: Use DBSCAN clustering to detect resets (more robust)
+        reset_drop_threshold: Threshold for derivative-based detection (billions)
+    """
+    
+    if not radar_frames:
+        return radar_frames, {"enabled": False, "reason": "no_data"}
+
+    # --- 1. Fast Vectorized Extraction ---
+    valid_data = []
+    for idx, frame in enumerate(radar_frames):
+        if frame.time_cpu_cycles is not None and len(frame.time_cpu_cycles) > 0:
+            valid_data.append((idx, frame.timestamp, frame.time_cpu_cycles[0]))
+
+    if len(valid_data) < 10:
+        if verbose: print("⚠️ Not enough data points to perform stitching.")
+        return radar_frames, {"enabled": False, "reason": "insufficient_data"}
+
+    indices, ros_times, cpu_starts = map(np.array, zip(*valid_data))
+
+    # --- 2. Reset Detection ---
+    reset_indices = []
+    
+    if use_clustering:
+        # Use DBSCAN clustering to find linear segments
+        try:
+            from sklearn.cluster import DBSCAN
+            
+            # Normalize data for clustering
+            cpu_norm = (cpu_starts - cpu_starts.mean()) / cpu_starts.std()
+            ros_norm = (ros_times - ros_times.mean()) / ros_times.std()
+            X = np.column_stack([cpu_norm, ros_norm])
+            
+            db = DBSCAN(eps=0.5, min_samples=5)
+            labels = db.fit_predict(X)
+            
+            n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+            
+            if n_clusters <= 1:
+                if verbose: print("✓ No CPU counter resets detected (single cluster).")
+                return radar_frames, {"resets_detected": False, "method": "clustering"}
+            
+            # Find boundaries between clusters based on ROS time ordering
+            # Since data is sorted by ROS time, find where cluster labels change
+            label_changes = np.where(np.diff(labels) != 0)[0]
+            reset_indices = label_changes
+            
+            if verbose:
+                print(f"⚠️  Clustering detected {n_clusters} segments, {len(reset_indices)} resets")
+                
+        except ImportError:
+            if verbose: print("⚠️  sklearn not available, falling back to derivative detection")
+            use_clustering = False
+    
+    if not use_clustering or len(reset_indices) == 0:
+        # Fallback: Derivative-based detection
+        diffs = np.diff(cpu_starts.astype(float))
+        reset_indices = np.where(diffs < reset_drop_threshold)[0]
+        
+        if len(reset_indices) == 0:
+            if verbose: print("✓ No CPU counter resets detected (derivative method).")
+            return radar_frames, {"resets_detected": False, "method": "derivative"}
+
+    if verbose:
+        print(f"⚠️  Detected {len(reset_indices)} resets. Stitching {len(reset_indices) + 1} segments...")
+
+    # --- 3. Iterative Stitching ---
+    corrected_frames = list(radar_frames) # Shallow copy list
+    
+    # Define segment boundaries: [0, reset_1, reset_2, ..., end]
+    # These are indices into the `valid_data` arrays, not the original list
+    segment_boundaries = np.concatenate(([-1], reset_indices, [len(indices)-1]))
+    
+    total_offset = 0.0
+    diagnostics_log = []
+    
+    # Loop through each segment gap
+    for i in range(len(segment_boundaries) - 1):
+        # Current segment indices (inclusive)
+        curr_seg_start = segment_boundaries[i] + 1
+        curr_seg_end = segment_boundaries[i+1]
+        
+        # Determine the offset for the NEXT segment (if there is one)
+        if i < len(segment_boundaries) - 2:
+            # We need to bridge the gap between curr_seg and next_seg
+            
+            # Get data for current segment to fit clock speed
+            seg_cpu = cpu_starts[curr_seg_start : curr_seg_end + 1]
+            seg_ros = ros_times[curr_seg_start : curr_seg_end + 1]
+            
+            # Default to simple 32-bit wrap if fit fails or segment too short
+            # (2**32 is approx 4.29 billion)
+            segment_gap_offset = 2**32 
+            method = "naive_wrap"
+
+            if len(seg_cpu) > 5:
+                # Fit line: ROS = slope * CPU + intercept
+                # slope units: seconds per cycle
+                slope, _, _, _, _ = linregress(seg_cpu, seg_ros)
+                
+                # Check if slope is sane (e.g., around 1/expect_freq)
+                # If slope is negative or wildly off, skip smart stitching
+                if slope > 0:
+                    last_ros = seg_ros[-1]
+                    last_cpu_corrected = seg_cpu[-1] + total_offset # Use currently accumulated offset
+                    
+                    next_idx = curr_seg_end + 1
+                    next_ros = ros_times[next_idx]
+                    next_cpu_raw = cpu_starts[next_idx]
+                    
+                    # Calculate gap in ROS time
+                    ros_gap = next_ros - last_ros
+                    
+                    # Convert ROS gap to CPU cycles using current clock speed
+                    estimated_cpu_gap = ros_gap / slope
+                    
+                    # Where the next segment SHOULD start
+                    target_next_start = last_cpu_corrected + estimated_cpu_gap
+                    
+                    # The offset needed to get there
+                    # offset = target - raw
+                    new_total_offset = target_next_start - next_cpu_raw
+                    
+                    segment_gap_offset = new_total_offset - total_offset
+                    method = "linear_fit"
+
+            # Update the running total for the *next* loop iteration
+            total_offset += segment_gap_offset
+            
+            if verbose:
+                print(f"   Gap {i+1}: method={method}, added_offset={segment_gap_offset:.0f}, total={total_offset:.0f}")
+
+        # Apply the CURRENT total_offset to all frames in the current segment
+        # (Note: For the first segment, total_offset is 0, which is correct)
+        # However, because we calculate the offset for the NEXT segment at the end of the loop,
+        # we need to be careful.
+        
+        # Actually, simpler logic:
+        # Loop 0: Apply offset 0. Calculate offset for Loop 1.
+        # Loop 1: Apply offset 1. Calculate offset for Loop 2.
+        
+        # We need to apply `total_offset` to the segment we just analyzed? 
+        # No, we apply `total_offset` (which starts at 0) to current segment. 
+        # Then we calculate the JUMP for the next one.
+        
+        # WAIT: The offset calculation above updated `total_offset` for the NEXT segment.
+        # So we must apply the offset BEFORE updating it.
+        pass 
+
+    # --- Corrected Loop Logic ---
+    total_offset = 0.0
+    
+    for i in range(len(segment_boundaries) - 1):
+        curr_seg_start = segment_boundaries[i] + 1
+        curr_seg_end = segment_boundaries[i+1]
+        
+        # 1. Apply current cumulative offset to this segment
+        if total_offset != 0:
+            for k in range(curr_seg_start, curr_seg_end + 1):
+                original_idx = indices[k]
+                frame = radar_frames[original_idx]
+                
+                # Create corrected cycles
+                new_cycles = [c + total_offset for c in frame.time_cpu_cycles]
+                
+                # Generic object update
+                if dataclasses.is_dataclass(frame):
+                    new_frame = dataclasses.replace(frame, time_cpu_cycles=new_cycles)
+                else:
+                    new_frame = copy(frame)
+                    new_frame.time_cpu_cycles = new_cycles
+                
+                corrected_frames[original_idx] = new_frame
+        
+        # 2. Calculate jump for the NEXT segment (if not last segment)
+        if i < len(segment_boundaries) - 2:
+            seg_cpu = cpu_starts[curr_seg_start : curr_seg_end + 1]
+            seg_ros = ros_times[curr_seg_start : curr_seg_end + 1]
+            
+            next_idx = curr_seg_end + 1
+            next_ros = ros_times[next_idx]
+            next_cpu_raw = cpu_starts[next_idx]
+            
+            # Linear Fit to project gap
+            jump = 2**32 # Default naive wrap
+            
+            if len(seg_cpu) > 5:
+                slope, _, _, _, _ = linregress(seg_cpu, seg_ros)
+                if slope > 0:
+                    last_ros = seg_ros[-1]
+                    # Important: Use raw CPU for slope calc, but we need the END of the stitched line
+                    last_cpu_stitched = seg_cpu[-1] + total_offset
+                    
+                    ros_gap = next_ros - last_ros
+                    estimated_cycles_gap = ros_gap / slope
+                    
+                    target_next_start = last_cpu_stitched + estimated_cycles_gap
+                    
+                    # The total offset required for the next segment
+                    required_total_offset = target_next_start - next_cpu_raw
+                    
+                    # The jump is the difference between new total and current total
+                    jump = required_total_offset - total_offset
+
+            total_offset += jump
+
+    return corrected_frames, {
+        "enabled": True,
+        "resets_detected": True, 
+        "resets_count": len(reset_indices),
+        "final_offset": total_offset
+    }
 
 def _extract_position_and_orientation(pose_msg) -> tuple[np.ndarray, np.ndarray]:
     """Extract position [x,y,z] and orientation [qx,qy,qz,qw] from pose message.

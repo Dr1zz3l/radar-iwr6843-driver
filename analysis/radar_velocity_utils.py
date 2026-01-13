@@ -10,15 +10,18 @@ This module provides functions for:
 import numpy as np
 from scipy.signal import butter, filtfilt, detrend
 from scipy.integrate import cumulative_trapezoid
+from scipy.optimize import least_squares
 
 
 def solve_ego_velocity_weighted(positions, velocities, intensities, 
-                                  min_intensity=5.0, min_range=0.2, min_points=5):
+                                  min_intensity=5.0, min_range=0.2, min_points=5,
+                                  use_huber=False, huber_delta=1.0):
     """
-    Solve for 3D body velocity using Weighted Least Squares.
+    Solve for 3D body velocity using Weighted Least Squares or robust Huber loss.
     
-    Minimizes: Σ w_i (r̂_i · v - v_rad,i)²
-    where w_i = intensity_i (trust brighter returns more)
+    Standard WLS minimizes: Σ w_i (r̂_i · v - v_rad,i)²
+    Huber loss minimizes: Σ w_i * ρ((r̂_i · v - v_rad,i) / δ)
+    where ρ(x) = x² for |x|≤1, 2|x|-1 for |x|>1
     
     Args:
         positions: Array of shape (N, 3) with [x, y, z] positions
@@ -26,10 +29,18 @@ def solve_ego_velocity_weighted(positions, velocities, intensities,
         intensities: Array of shape (N,) with signal intensities
         min_intensity: Minimum intensity threshold
         min_range: Minimum range threshold (meters)
-        min_points: Minimum number of points required
+        min_points: Minimum number of points required (still needed for Huber!)
+        use_huber: If True, use Huber loss instead of L2
+        huber_delta: Huber loss threshold parameter (m/s)
         
     Returns:
         v_body: 3D velocity vector [vx, vy, vz] or None if insufficient data
+        
+    Note:
+        min_points is still required with Huber loss because we need at least
+        3 points to solve for 3D velocity (more for numerical stability).
+        Huber loss handles outliers better but doesn't eliminate the need for
+        sufficient measurements.
     """
     H = []
     z = []
@@ -58,19 +69,50 @@ def solve_ego_velocity_weighted(positions, velocities, intensities,
     
     H = np.array(H)
     z = np.array(z)
-    W = np.diag(weights)
+    weights = np.array(weights)
     
-    try:
-        # Weighted Least Squares: (H^T W H)^-1 H^T W z
-        lhs = H.T @ W @ H
-        rhs = H.T @ W @ z
-        v_body = np.linalg.solve(lhs, rhs)
-        return v_body
-    except np.linalg.LinAlgError:
-        return None
+    if use_huber:
+        # Robust estimation using Huber loss
+        def residual_func(v):
+            residuals = H @ v - z
+            # Weight residuals by intensity
+            weighted_residuals = np.sqrt(weights) * residuals
+            return weighted_residuals
+        
+        try:
+            # Initial guess from standard WLS
+            W = np.diag(weights)
+            lhs = H.T @ W @ H
+            rhs = H.T @ W @ z
+            v_init = np.linalg.solve(lhs, rhs)
+            
+            # Optimize with Huber loss
+            result = least_squares(
+                residual_func, 
+                v_init, 
+                loss='huber',
+                f_scale=huber_delta,
+                method='trf'
+            )
+            return result.x
+        except (np.linalg.LinAlgError, ValueError):
+            return None
+    else:
+        # Standard Weighted Least Squares
+        W = np.diag(weights)
+        
+        try:
+            # Weighted Least Squares: (H^T W H)^-1 H^T W z
+            lhs = H.T @ W @ H
+            rhs = H.T @ W @ z
+            v_body = np.linalg.solve(lhs, rhs)
+            return v_body
+        except np.linalg.LinAlgError:
+            return None
 
 
-def process_radar_frames(radar_frames, min_intensity=5.0, min_range=0.2, min_points=5):
+def process_radar_frames(radar_frames, min_intensity=5.0, min_range=0.2, min_points=5,
+                         use_huber=False, huber_delta=1.0):
     """
     Process all radar frames to extract ego-velocity estimates.
     
@@ -79,6 +121,8 @@ def process_radar_frames(radar_frames, min_intensity=5.0, min_range=0.2, min_poi
         min_intensity: Minimum intensity threshold
         min_range: Minimum range threshold (meters)
         min_points: Minimum number of points required
+        use_huber: If True, use Huber loss instead of L2
+        huber_delta: Huber loss threshold parameter (m/s)
         
     Returns:
         Dictionary with arrays:
@@ -102,7 +146,9 @@ def process_radar_frames(radar_frames, min_intensity=5.0, min_range=0.2, min_poi
             frame.intensities,
             min_intensity=min_intensity,
             min_range=min_range,
-            min_points=min_points
+            min_points=min_points,
+            use_huber=use_huber,
+            huber_delta=huber_delta
         )
         
         if v_body is not None:
