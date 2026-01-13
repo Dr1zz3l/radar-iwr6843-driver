@@ -264,3 +264,122 @@ def filter_valid_cpu_cycles(data_dict):
         key: value[valid_mask] if isinstance(value, np.ndarray) else value
         for key, value in data_dict.items()
     }
+
+
+def find_time_shift(t_reference, v_reference, t_sensor, v_sensor, 
+                    search_window=(-0.2, 0.2), crop_duration=1.0):
+    """
+    Find optimal time shift between two velocity signals.
+    
+    Finds the time shift 'dt' such that v_sensor(t + dt) ~ v_reference(t).
+    A positive dt means the sensor data is DELAYED (arrives late).
+    
+    Args:
+        t_reference: Reference timestamps (e.g., IMU)
+        v_reference: Reference velocity signal
+        t_sensor: Sensor timestamps (e.g., radar)
+        v_sensor: Sensor velocity signal
+        search_window: Search range for time shift in seconds (min, max)
+        crop_duration: Duration in seconds to crop from start/end (0 or False to disable)
+        
+    Returns:
+        Tuple of (optimal_dt, min_rmse, correlation_at_optimum)
+    """
+    from scipy.interpolate import interp1d
+    from scipy.optimize import minimize_scalar
+    
+    # Create interpolator for sensor data
+    sensor_interp = interp1d(t_sensor, v_sensor, kind='linear', 
+                            fill_value="extrapolate", bounds_error=False)
+    
+    # Compute crop indices (0 if cropping disabled)
+    if crop_duration:
+        sample_rate = len(t_reference) / (t_reference[-1] - t_reference[0])
+        crop_samples = int(crop_duration * sample_rate)
+    else:
+        crop_samples = 0
+    
+    # Crop edges to avoid filter artifacts (or use full signal if crop_samples=0)
+    if crop_samples > 0:
+        t_ref_cropped = t_reference[crop_samples:-crop_samples]
+        v_ref_cropped = v_reference[crop_samples:-crop_samples]
+    else:
+        t_ref_cropped = t_reference
+        v_ref_cropped = v_reference
+    
+    # Define cost function (RMSE)
+    def cost_function(dt):
+        # Query sensor at (t_reference - dt)
+        # If dt is positive (delay), we look BACK in sensor time
+        v_sensor_shifted = sensor_interp(t_ref_cropped - dt)
+        
+        # Calculate RMSE
+        err = v_ref_cropped - v_sensor_shifted
+        return np.sqrt(np.mean(err**2))
+    
+    # Optimize with higher precision
+    result = minimize_scalar(
+        cost_function, 
+        bounds=search_window, 
+        method='bounded',
+        options={'xatol': 1e-6}  # Aim for microsecond precision
+    )
+    
+    # Compute correlation at optimum
+    v_sensor_optimal = sensor_interp(t_ref_cropped - result.x)
+    correlation = np.corrcoef(v_ref_cropped, v_sensor_optimal)[0, 1]
+    
+    return result.x, result.fun, correlation
+
+
+def compute_alignment_metrics(t_reference, v_reference, t_sensor, v_sensor, dt_shift, crop_duration=1.0):
+    """
+    Compute alignment quality metrics after applying time shift.
+    
+    Args:
+        t_reference: Reference timestamps
+        v_reference: Reference velocity
+        t_sensor: Sensor timestamps
+        v_sensor: Sensor velocity
+        dt_shift: Time shift to apply (positive = sensor delayed)
+        crop_duration: Duration in seconds to crop from edges (0 or False to disable)
+        
+    Returns:
+        Dictionary with rmse, correlation, residuals, aligned signal, and crop_samples
+    """
+    from scipy.interpolate import interp1d
+    
+    # Apply shift and interpolate
+    sensor_interp = interp1d(t_sensor, v_sensor, kind='linear', 
+                            fill_value="extrapolate", bounds_error=False)
+    v_sensor_aligned = sensor_interp(t_reference - dt_shift)
+    
+    # Compute crop indices (0 if cropping disabled)
+    if crop_duration:
+        sample_rate = len(t_reference) / (t_reference[-1] - t_reference[0])
+        crop_samples = int(crop_duration * sample_rate)
+    else:
+        crop_samples = 0
+    
+    # Compute metrics on cropped data (or full data if crop_samples=0)
+    if crop_samples > 0:
+        v_ref_cropped = v_reference[crop_samples:-crop_samples]
+        v_sensor_cropped = v_sensor_aligned[crop_samples:-crop_samples]
+    else:
+        v_ref_cropped = v_reference
+        v_sensor_cropped = v_sensor_aligned
+    
+    residuals_cropped = v_ref_cropped - v_sensor_cropped
+    rmse = np.sqrt(np.mean(residuals_cropped**2))
+    correlation = np.corrcoef(v_ref_cropped, v_sensor_cropped)[0, 1]
+    
+    # Full residuals for plotting
+    residuals_full = v_reference - v_sensor_aligned
+    
+    return {
+        'rmse': rmse,
+        'correlation': correlation,
+        'residuals': residuals_full,
+        'v_sensor_aligned': v_sensor_aligned,
+        'crop_samples': crop_samples
+    }
