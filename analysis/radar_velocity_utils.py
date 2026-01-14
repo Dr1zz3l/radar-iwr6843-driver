@@ -11,7 +11,8 @@ import numpy as np
 from scipy.signal import butter, filtfilt, detrend
 from scipy.integrate import cumulative_trapezoid
 from scipy.optimize import least_squares
-
+from scipy.interpolate import interp1d
+from scipy.optimize import minimize_scalar
 
 def solve_ego_velocity_weighted(positions, velocities, intensities, 
                                   min_intensity=5.0, min_range=0.2, min_points=5,
@@ -285,9 +286,7 @@ def find_time_shift(t_reference, v_reference, t_sensor, v_sensor,
     Returns:
         Tuple of (optimal_dt, min_rmse, correlation_at_optimum)
     """
-    from scipy.interpolate import interp1d
-    from scipy.optimize import minimize_scalar
-    
+
     # Create interpolator for sensor data
     sensor_interp = interp1d(t_sensor, v_sensor, kind='linear', 
                             fill_value="extrapolate", bounds_error=False)
@@ -310,7 +309,8 @@ def find_time_shift(t_reference, v_reference, t_sensor, v_sensor,
     # Define cost function (RMSE)
     def cost_function(dt):
         # Query sensor at (t_reference - dt)
-        # If dt is positive (delay), we look BACK in sensor time
+        # If dt is negative (delay), we look BACK in sensor time
+        # We found the optimal data later in the sensor stream
         v_sensor_shifted = sensor_interp(t_ref_cropped - dt)
         
         # Calculate RMSE
@@ -347,7 +347,6 @@ def compute_alignment_metrics(t_reference, v_reference, t_sensor, v_sensor, dt_s
     Returns:
         Dictionary with rmse, correlation, residuals, aligned signal, and crop_samples
     """
-    from scipy.interpolate import interp1d
     
     # Apply shift and interpolate
     sensor_interp = interp1d(t_sensor, v_sensor, kind='linear', 
