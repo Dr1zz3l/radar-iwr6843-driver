@@ -1,0 +1,104 @@
+\section{Experimental Setup}
+\label{sec:setup}
+
+All experiments use the rosbag datasets collected in a Vicon \ac{mocap}
+lab.  \autoref{tab:datasets} summarizes the three bags used for
+evaluation.
+
+\begin{table}[t]
+\centering
+\caption{Dataset Summary}
+\label{tab:datasets}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Bag & Dur.\ (s) & $v_{\max}$ (m/s) & $|\omega|_{\max}$ (rad/s) & Frames \\
+\midrule
+Slow racing & 25.8 & 3.65 & 2.62 & 258 \\
+Fast racing & 18.0 & 5.66 & 9.14 & 179 \\
+Backflips\textsuperscript{*} & 18.1 & $\sim$4.3 (95\%) & $\sim$10.9 (95\%) & 181 \\
+\bottomrule
+\multicolumn{5}{@{}p{\columnwidth}@{}}{\scriptsize \textsuperscript{*}95th
+percentile; \ac{mocap} tracking artifacts dominate the instantaneous peaks.
+The ${\sim}10$\,rad/s headline is this 95th-percentile sustained rate, not an
+instantaneous maximum.}
+\end{tabular}
+\end{table}
+
+All three regimes run the \emph{same} sliding-window solver, weighting law,
+and front-end; \autoref{tab:config} collects the handful of per-regime knobs
+that differ, so that every reported number can be reproduced from one place.
+
+\begin{table}[t]
+\centering
+\caption{Per-Regime Sliding-Window Configuration}
+\label{tab:config}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Parameter & Slow & Fast & Backflips \\
+\midrule
+Position knot $\Delta t_p$ (ms)        & 5  & 40  & 10 \\
+Orientation knot $\Delta t_o$ (ms)     & 8  & 16  & 8 \\
+LM iteration cap                       & 12 & 400 & 400 \\
+Heading prior $\lambda_\psi$           & 10 & 0.6 & 10 \\
+Doppler elevation corr.\ $b$ (m/s)     & --- & --- & $-1.5$ \\
+Position-init anchor $\lambda_{p_0}$   & --- & --- & 0.5 \\
+\bottomrule
+\multicolumn{4}{@{}p{0.92\columnwidth}@{}}{\footnotesize Shared across all
+regimes: 3\,s window, 0.3\,s stride, unscaled Markov-blanket marginalization
+prior, the single dynamics-adaptive weighting law (\autoref{sec:models}),
+RANSAC ego-velocity prefilter (\SI{0.15}{\metre\per\second} inlier),
+sensor-only initialization, and frozen extrinsic pitch \SI{27.5}{\degree}.
+``---'' marks the shared default: uncapped-by-data iterations, and the
+flight-regime elevation correction / position tether off.}
+\end{tabular}
+\end{table}
+
+\textbf{\ac{imu} rate:} $\sim$993\,Hz (full rate, no downsampling).
+\textbf{Evaluation:} Start-anchored rigid alignment to \ac{mocap} ground
+truth: the alignment rotation $\mathbf{R}_\mathrm{align} =
+\mathbf{R}_{\mathrm{gt},0}\,\mathbf{R}_{\mathrm{est},0}^\top$
+and translation $\mathbf{t}_\mathrm{align} =
+\mathbf{p}_{\mathrm{gt},0} - \mathbf{R}_\mathrm{align}\,
+\mathbf{p}_{\mathrm{est},0}$ are fixed at frame~0 (no scale).
+The final 3\,s is trimmed.  Velocity \ac{rmse} is computed from the
+analytical first derivative of the position B-spline, not from finite
+differences of the estimated trajectory; the reference is the Vicon-fed
+onboard state-estimate velocity, zero-phase low-pass filtered (4th-order
+Butterworth, \SI{10}{\hertz}), not a raw finite difference of \ac{mocap}
+position.
+\emph{Position drift} (\%) is position \ac{rmse} normalised by the total
+GT path length, the standard odometry metric for a
+dead-reckoning system with no loop closure (per-segment \ac{rpe} in
+\autoref{sec:sw_results}).
+Start-anchored alignment is harsher than the whole-trajectory
+SE(3)/Umeyama fit (the EVO/KITTI default) used by most odometry papers,
+because it cannot retro-fit a constant transform to cancel accumulated
+drift: it fixes the frame once, at the start, exactly as a deployed
+estimator must.  We adopt it precisely for this causal,
+deployment-relevant reading, and apply it identically to every system
+compared.  Where we compare against externally published figures
+(\autoref{sec:baselines}) we additionally report whole-trajectory-aligned
+numbers so the baselines can be cross-checked against their own papers.
+For sliding window, \emph{live (leading-edge)} \ac{rmse} is computed by
+snapshotting the estimate at $[t_\text{end}{-}\text{stride},\, t_\text{end}]$
+of each window at 50\,Hz before any subsequent refinement.  The
+\emph{settled} \ac{rmse} evaluates the same trajectory after all windows
+have refined each point.
+
+\textbf{Solver implementation.}
+The Ceres LM problem is solved with \texttt{SPARSE\_NORMAL\_CHOLESKY}
+(SuiteSparse), up to 400 iterations (function-tolerance stop;
+typically ${\sim}30$).
+The analytic Jacobians combine the basalt cumulative-spline
+Jacobian struct for the spline terms, closed-form expressions for the
+\ac{imu} sensor terms, and SymForce-generated code~\cite{martiros2022symforce}
+for the radar sensor term; Ceres automatic differentiation was
+eliminated to avoid Jet-arithmetic overhead over the large set of
+spline control-point parameters per factor.
+In the sliding-window solver the linear solve and the
+marginalization-prior recompute (\texttt{compute\_prior}, evaluated
+\emph{every} LM iteration, as distinct from the ${\sim}10$\,ms one-time
+prior \emph{formation} of \autoref{sec:sw}) are the dominant costs;
+Jacobian evaluation accounts for roughly 25--30\% of per-window wall time.

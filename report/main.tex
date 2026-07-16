@@ -1,0 +1,147 @@
+\documentclass[journal]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage{cite}
+\usepackage{url}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{amsthm}
+\newtheorem{proposition}{Proposition}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{siunitx}
+\usepackage{bm}
+\usepackage{gensymb}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, fit, backgrounds, calc}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+% Math shortcuts
+\newcommand{\vR}{\mathbf{R}}
+\newcommand{\vp}{\mathbf{p}}
+\newcommand{\vv}{\mathbf{v}}
+\newcommand{\va}{\mathbf{a}}
+\newcommand{\vom}{\boldsymbol{\omega}}
+\newcommand{\vg}{\mathbf{g}}
+\newcommand{\vu}{\hat{\mathbf{u}}}
+\newcommand{\vb}{\mathbf{b}}
+\newcommand{\vz}{\mathbf{z}}
+\newcommand{\vOm}{\boldsymbol{\Omega}}
+\newcommand{\SO}{\mathrm{SO}(3)}
+\newcommand{\so}{\mathfrak{so}(3)}
+\newcommand{\Exp}{\mathrm{Exp}}
+\newcommand{\Log}{\mathrm{Log}}
+\newcommand{\calX}{\mathcal{X}}
+
+% --- Cross-references: \autoref with IEEE-style names ---
+\usepackage[hidelinks]{hyperref}
+\renewcommand{\sectionautorefname}{Section}
+\renewcommand{\subsectionautorefname}{Section}
+\renewcommand{\subsubsectionautorefname}{Section}
+\renewcommand{\figureautorefname}{Fig.}
+\renewcommand{\tableautorefname}{Table}
+\renewcommand{\equationautorefname}{Eq.}
+
+% --- Acronyms: first \ac{} use writes out the long form + short; later
+%     uses print the short form only (\printacronyms lists them). ---
+\usepackage{acro}
+\acsetup{list/template=tabular}  % auto-size the short-form column
+\input{acronyms}
+
+% Modestly tighten float/text separation to keep the bibliography within
+% the 12-page limit (reversible; no content change).
+\setlength{\textfloatsep}{6pt plus 2pt minus 2pt}
+\setlength{\floatsep}{6pt plus 2pt minus 2pt}
+\setlength{\intextsep}{6pt plus 2pt minus 2pt}
+
+\begin{document}
+
+\title{Continuous-Time Radar-Inertial Odometry\\with B-Spline Sliding-Window Optimization}
+
+\author{Timo~Weiss~and~Lukas~Pries%
+\thanks{Manuscript received Month~XX,~2026; revised Month~XX,~2026.}%
+\thanks{The authors are with the Department of Informatics, Technical
+University of Munich (TUM), 80333 Munich, Germany (e-mail:
+timo.weiss@tum.de; lukas.pries@tum.de).}%
+\thanks{Code and datasets are available at
+\protect\url{https://github.com/Dr1zz3l/spline-rio}.}}
+
+\markboth{IEEE Transactions on Robotics,~Vol.~XX, No.~X, Month~2026}%
+{Weiss and Pries: Continuous-Time Radar-Inertial Odometry}
+
+\maketitle
+
+%------------------------------------------------------------------
+\begin{abstract}
+We present a radar-inertial odometry (RIO) system for 6-DoF state
+estimation on a quadrotor using a single-chip 60\,GHz mmWave radar
+(TI IWR6843, 10--60 points per frame) and a 1\,kHz IMU, evaluated through aggressive
+racing and attitude-tumbling flight up to \SI{10}{\radian\per\second}:
+a regime existing RIO evaluations do not cover, where the radar
+model itself degrades.  The trajectory is a continuous-time quintic
+position B-spline and a cumulative SO(3) orientation B-spline, optimized
+by a fixed-lag smoother with Schur complement marginalization at a
+0.3\,s stride over a 3\,s window; a sensor-only pipeline initializes it
+without external \emph{pose} reference.  Doppler measures velocity
+directly, so we evaluate RIO as a \emph{velocity and orientation}
+source, reporting position as drift per distance.  A Markov-blanket
+factor-selection rule makes the marginalization a true marginal, and a
+single dynamics-adaptive measurement-weighting law covers hover to
+\SI{10}{\radian\per\second}, validated on held-out racing flights.  At the live
+leading edge (the newest window estimate, before later windows refine
+it), velocity and orientation RMSE stay below
+\SI{0.5}{\metre\per\second} and \SI{3}{\degree} across racing (position
+drift around \SI{1}{\percent}) and degrade gracefully to
+\SI{6.4}{\degree} orientation (\SI{2.9}{\percent} drift) under tumbling.
+The output
+orientation covariance is approximately calibrated (NEES) on the racing
+flights. The orientation figures assume an \emph{idealized} external heading
+reference; a perturbed one raises racing orientation error to ${\sim}2$--$3.5\degree$.
+We also document negative
+results: a diagnostic for marginalization inconsistency, and that the
+tumbling elevation bias is a flight-regime proxy, not an antenna
+constant.
+\end{abstract}
+
+\begin{IEEEkeywords}
+radar-inertial odometry, continuous-time estimation, B-spline,
+sliding window, marginalization, mmWave radar, Doppler velocity
+\end{IEEEkeywords}
+
+
+% ---- Body: one file per section (sections/) ----
+\input{sections/introduction}
+\input{sections/related_work}
+\input{sections/preliminaries}
+\input{sections/system_overview}
+\input{sections/methodology}
+\input{sections/experimental_setup}
+\input{sections/results}
+\input{sections/limitations}
+\input{sections/conclusion}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+% Author biographies (<=100 words each; required for the final accepted version,
+% optional for initial submission). Omitted in the initial submission to respect
+% the 12-page limit; uncomment for the accepted version (add degrees/dates/photos).
+% \begin{IEEEbiographynophoto}{Timo Weiss}
+% is with the Technical University of Munich (TUM), Munich, Germany. His
+% research interests include radar-inertial odometry, continuous-time
+% state estimation on Lie groups, and aerial robotics in
+% perception-degraded conditions.
+% \end{IEEEbiographynophoto}
+%
+% \begin{IEEEbiographynophoto}{Lukas Pries}
+% is with the Technical University of Munich (TUM), Munich, Germany, where
+% he supervises research in radar perception and autonomous aerial systems.
+% \end{IEEEbiographynophoto}
+
+\end{document}
+

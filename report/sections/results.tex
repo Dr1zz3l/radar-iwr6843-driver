@@ -1,0 +1,445 @@
+\section{Results}
+\label{sec:results}
+
+\subsection{Batch Solver and Extrinsic Pitch}
+We use the full-trajectory batch solve as an offline full-batch
+reference; offline it reaches
+\SI{0.20}{\metre}\,/\,\SI{1.1}{\degree} on slow racing and
+\SI{0.74}{\metre}\,/\,\SI{2.4}{\degree} on fast (the dense racing
+$\Delta t_p$ over-fits fast racing, where the coarser sliding window
+does better).
+The radar-to-body pitch is a fixed mount angle, measured at
+27--28\degree\ with an inclinometer on the radar face (reference surface
+0\degree) and frozen at 27.5\degree, a few degrees below the
+30\degree\ \ac{cad} design (3D-printed, hand-assembled fixture).  We lock it
+rather than estimate it online because it is only weakly observable from
+Doppler: the self-calibration is init-dependent and orientation \ac{rmse} is
+pitch-insensitive (\autoref{sec:backflips}).
+
+\subsection{Sliding Window: Settled vs.\ Live}
+\label{sec:sw_results}
+
+\autoref{tab:sw} reports sliding window results
+(3\,s window, 0.3\,s stride, Schur marginalization).
+\autoref{fig:traj} shows trajectory overlays for all three flights;
+\autoref{fig:error_time} shows the corresponding error timeseries.
+
+\begin{table}[t]
+\centering
+\caption{Sliding Window: Settled and Live Leading-Edge \ac{rmse}
+  (consistent unscaled prior; per-window solve time on a laptop CPU)}
+\label{tab:sw}
+\small
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{@{}llccccc@{}}
+\toprule
+Bag & Mode & Vel (m/s) & Ori (\degree) & Pos (m) & Drift\% & $t_{\mathrm{win}}$(s) \\
+\midrule
+\multirow{2}{*}{Slow racing}
+  & Settled & 0.42 & 1.53 & 0.293 & 0.61 & \multirow{2}{*}{0.70} \\
+  & \textbf{Live edge} & \textbf{0.48} & \textbf{1.97} & \textbf{0.310} & \textbf{0.64} & \\
+\midrule
+\multirow{2}{*}{Fast racing}
+  & Settled & 0.25 & 2.34 & 0.382 & 0.85 & \multirow{2}{*}{0.35} \\
+  & \textbf{Live edge} & \textbf{0.32} & \textbf{2.90} & \textbf{0.469} & \textbf{1.04} & \\
+\midrule
+\multirow{2}{*}{Backflips\textsuperscript{$\ddagger$}}
+  & Settled & ---\textsuperscript{$\ast$} & 5.01 & 1.674 & 3.09 & \multirow{2}{*}{0.6} \\
+  & \textbf{Live edge} & \textbf{2.35} & \textbf{6.35} & \textbf{1.545} & \textbf{2.85} & \\
+\bottomrule
+\multicolumn{7}{@{}p{\columnwidth}@{}}{\scriptsize
+  All bags use the unscaled consistent marginalization prior
+  (\autoref{sec:sw}) and the \emph{same} dynamics-adaptive weighting
+  law (\autoref{sec:models}).  Per-regime parameters are limited to
+  spline grids ($\Delta t_p{=}5/40/10$\,ms), the heading weight, and
+  for backflips the position-init anchor
+  ($\lambda_{\mathrm{pos\text{-}init}}{=}0.5$) and flip-regime Doppler
+  correction $b{=}{-}1.5$\,m/s (\autoref{sec:backflips}).  Extrinsic
+  pitch locked at 27.5\degree\ for all bags.
+  $^\ast$Settled velocity is not reported for backflips: stride-boundary
+  resampling injects a retrospective-evaluation artifact there, which also
+  leaves backflips settled \emph{position} above live (the one such
+  inversion); the \textbf{bold} live-edge rows are the deployment-relevant figures throughout.
+  Drift\,\%: path lengths 48.1\,m / 44.9\,m / 54.1\,m.
+  Iteration-capped configurations reproduce bit-identically across repeated
+  runs on a fixed platform/BLAS (single-thread reduction);
+  full-convergence configurations vary by $<$2\%
+  (multithreaded reduction order).}
+\end{tabular}
+\end{table}
+
+Live-edge orientation degrades 0.4--0.6\degree\ relative to settled;
+this is expected because subsequent windows refine previous estimates.
+As a complementary per-segment view, the live-edge KITTI translational
+\ac{rpe} converges to $1.0$--$2.1\%$ beyond 20\,m on racing (from
+$5$--$9\%$ at 5\,m segments, where the ${\sim}11$\,Hz radar yields few
+Doppler per segment) and to ${\sim}5.6\%$ on backflips; full curves are
+released with the code.
+With the consistent prior, settled velocity is smooth across stride
+boundaries.
+We report all tables, plots, and the cross-validation of
+\autoref{sec:baselines} at a single \emph{evaluation configuration}
+(3\,s window, 0.3\,s stride), chosen for best accuracy and cross-table
+consistency, not as a deployment claim: per-window solve time is set
+by window length and knot density, not the stride, and at 3\,s only fast
+racing approaches the 0.3\,s budget on a laptop CPU.  Real time is
+nonetheless within reach: pushing the window and stride to \emph{barely}
+reach it per regime costs almost nothing.
+Fast is real-time at the 0.3\,s stride with a 2\,s window, slow and
+backflips at a 0.5\,s stride (1.5\,s and 2\,s windows);
+each drops per-window solve below its stride
+(0.28/0.40/0.43\,s for fast/slow/backflips).
+Slow racing and
+backflips stay within run-to-run noise (backflips even improves,
+$6.35\to5.56\degree$), and fast-racing position degrades only modestly
+($1.04\to1.15\%$ drift).  Solve times carry $\sim$20\% variance,
+so the strides are taken with margin.
+
+Deployment asks for more than \emph{barely} real-time.  As one factor source
+in a larger fusion graph (\autoref{sec:nees}) sharing compute with a parallel
+visual or lidar pipeline, a tuned, no-margin point on a dedicated CPU is a
+feasibility demonstration, not a deployment budget.  The margin must come from
+the back-end, and since a banded Schur factorization is numerically unstable
+at our conditioning, the route is incremental smoothing, not batch re-solve:
+Girod et al.~\cite{girod2024brio} reach comfortable onboard rates with exactly
+such an iSAM2 back-end (discrete-time graph), and porting our continuous-time
+B-spline onto it, where the shared global bias induces a Bayes-tree fill-in,
+is the deployment path we leave to future work.
+The dominant cost reductions were: the consistent prior removing
+the marginalization re-linearization ($\sim$0.6\,s), coarsening
+$\Delta t_p$ from 5\,ms to 40\,ms for aggressive flight (which
+\emph{also} drops the LM iteration count from 28 to 11 and slightly
+improves orientation), and warm-start alignment removing the
+live-edge seam.
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/traj_combined.pdf}
+  \caption{Trajectory overlays for all three flights (columns): \ac{mocap}
+    ground truth vs.\ the SW live edge, X--Y (top) and Y--Z (bottom)
+    projections. Within each column both projections share a common $Y$ range
+    and metric scale (equal aspect, so loops keep their true shape); the scale
+    differs between columns, so compare shapes rather than absolute sizes across
+    columns. Start~$\blacksquare$.  Larger fast-racing deviations
+    reflect higher dynamics ($\omega_{\max}=9.1$\,rad/s); on backflips
+    the residual ${\sim}6\degree$ live orientation error attenuates the
+    loop circles while the donut sweep and altitude are followed.}
+  \label{fig:traj}
+\end{figure*}
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/error_over_time.pdf}
+  \caption{SW live-edge (deployed) position, velocity, and orientation
+    error vs.\ time for slow racing (top), fast racing (middle), and
+    backflips (bottom).  Fast-racing position error accumulates
+    monotonically with trajectory length; velocity and orientation errors
+    spike at high-speed, high-dynamics sections; backflip errors peak
+    \emph{during} the flips, where the radar measurement model degrades
+    (\autoref{sec:backflips}).}
+  \label{fig:error_time}
+\end{figure*}
+
+\subsection{Radar Contribution}
+Radar is essential.  Disabling the radar factors collapses the
+live-edge estimate to \ac{imu} dead-reckoning: position drift balloons to
+5.9\% on slow racing and diverges on fast racing ($\approx$99.5\% of
+distance), with velocity \ac{rmse} rising to 2.4 and 8.0\,m/s as
+double-integrated accelerometer noise accumulates unbounded.  The direct
+Doppler velocity constraints bound this to the \autoref{tab:sw} figures
+(0.6--0.9\% drift, 0.32--0.48\,m/s velocity), one-to-two orders of magnitude
+lower.  Orientation
+improves more modestly, from 8.9\degree/4.0\degree\ (\ac{imu}-only) to
+2.0\degree/2.9\degree, the 1\,kHz gyroscope already constraining it.
+
+\subsection{Held-Out Validation}
+\label{sec:heldout}
+All tuning used three bags (slow/fast racing, backflips); the final
+configuration was then run \emph{unmodified} on flights never used for
+any decision.  A second, independent fast-racing flight reaches
+0.37\,m\,/\,2.81\degree\ live (vs.\ 0.47\,m\,/\,2.90\degree\ on the
+tuning bag), and a circular trajectory reaches
+0.90\,m\,/\,3.77\degree\ live.
+Five additional stress-tier bags from an earlier recording day use an
+older radar firmware (best-position firmware) with $12\times$ coarser Doppler quantization
+(0.604 vs.\ 0.049\,m/s), partially unusable accelerometer axes, and
+per-day time offsets; the default \ac{ransac} prefilter still keeps
+$46$--$75\%$ of returns (no starvation), and the system degrades
+gracefully (1.5--7\,m position), with the \emph{old-firmware backflips}
+orientation reaching 8.1\degree\ settled\,/\,9.1\degree\ live (better
+than the 14.8\degree\ of its previous, individually tuned best) under
+the untuned universal configuration.  The rate-adaptive weighting thus
+transfers across both firmware and day.
+Each flight condition is a single representative recording; the
+evaluation's breadth comes from these held-out flights and the
+cross-platform validation of \autoref{sec:baselines} rather than
+repeated trials (\autoref{sec:stat_scope}).
+
+\subsection{External Cross-Validation Against EKF Baselines}
+\label{sec:baselines}
+We cross-validate against the \ac{ekf}-\ac{rio} family of Doer and
+Trommer~\cite{doer2020ekf,doer2021yrio} in both directions on shared
+data, with their toolbox pinned at a fixed commit and every parameter
+deviation documented in the repository.
+
+\textbf{Our system on their data.}  We run our sliding-window solver,
+with the universal weighting configuration unmodified, on the four
+public ICINS-2021 indoor flight datasets~\cite{doer2021yrio}
+(TI IWR6843AOP at 10\,Hz, Analog Devices ADIS16448 \ac{imu} at 409\,Hz with
+onboard barometer, loop-closure-and-scale-corrected VINS pseudo ground
+truth), using their published extrinsic calibration (locked) and
+their $\pm 60\degree$ elevation pre-gate.  Their estimators
+(\mbox{ekf-rio}, unaided yaw; \mbox{ekf-yrio}, Manhattan-world radar
+yaw aiding) are re-run from their stock configurations on the same
+bags, and \emph{both} systems are evaluated with the identical causal
+protocol of \autoref{sec:setup} (live estimates, start-anchored
+alignment, same windows and ground truth).
+\autoref{tab:baselines} reports the headline metrics~(a) and their
+decomposition~(b).  On position our \emph{horizontal} drift is
+competitive ($0.14$--$0.30\%$ of path, \autoref{tab:baselines}(b)); the
+larger total drift (0.6--1.3\% vs.\ the baselines' 0.3--0.6\%) is almost
+entirely the \emph{vertical} channel (0.63--1.28\%), the single-chip
+elevation residual the \ac{ransac} prefilter targets (below).  Velocity
+\ac{rmse} 0.07--0.08\,m/s matches theirs; absolute position is
+0.5--1.9\,m, trailing the yaw-aided ekf-yrio.
+The full 3-DoF orientation column favors our solver
+(0.51--1.13\degree\ vs.\ up to $10.1\degree$), but this gap is almost
+entirely \emph{yaw}: our heading is anchored by a pseudo-magnetometer
+(here a VINS pseudo-GT yaw surrogate), whereas
+ekf-yrio uses sensor-only Manhattan-world yaw and ekf-rio is unaided.
+On the heading-\emph{independent} roll and pitch the three systems are
+comparable ($0.25$--$0.74\degree$, \autoref{tab:baselines}(b)),
+so the orientation column is not an attitude win; removing our heading
+aiding confirms this: on flight\_1 our unaided yaw drifts to
+$9.9\degree$, matching unaided ekf-rio ($10.1\degree$), while roll/pitch
+and position are essentially unchanged.
+
+The default \ac{ransac} prefilter (\autoref{sec:models}) buys this
+same-order position, its clearest single demonstration.
+A single-chip radar's small virtual aperture gives coarse
+elevation resolution, and a minority of returns carry an
+elevation-correlated Doppler bias.  Doer's \mbox{reve} rejects these
+with 3D \ac{ransac} (inlier $0.15$\,m/s); a Huber-robust least squares only
+down-weights them.  Measured against the ground-truth attitude, the
+per-frame vertical ego-velocity bias is $-0.06$ to $-0.16$\,m/s under a
+Huber-only front-end but at most $0.10$\,m/s in magnitude under \ac{ransac}.
+With the prefilter \emph{disabled}, our vertical channel accumulates a
+large systematic error (whole-trajectory \ac{ate} $9.6$\,m on flight\_1,
+$12$--$15\%$ vertical drift) that the baselines do not exhibit (theirs
+stays $\sim$0.2--0.3\,m); the \ac{ransac} prefilter removes it
+at the source on all four flights, cutting whole-trajectory \ac{ate} to
+$0.24$--$0.76$\,m (\autoref{tab:baselines}(b)) and bringing
+position back into the baselines' range.  Their vertical accuracy is
+not altitude aiding either: disabling the barometer in ekf-yrio shifts
+its vertical drift by $\le$0.04\,m (stock $\sigma_\mathrm{altimeter}{=}5$\,m
+makes its contribution near-negligible), so they too estimate vertical from radar and
+\ac{imu} alone, by the same outlier-rejection mechanism.  The single-chip
+elevation bias is therefore real but not fundamental: an
+outlier-rejection gap, closed by the same \ac{ransac} stage the
+baselines use.  Under
+whole-trajectory Umeyama alignment (\autoref{tab:baselines}(b))
+all three systems agree to $\le$1\,m, consistent with the baselines'
+published full-alignment figures (they are faithfully reproduced) and
+confirming that our default front-end matches them.
+
+\textbf{Their filters on our data.}  The reverse port is a
+\emph{sensor/stack-coupling characterization}, not a head-to-head
+comparison; it is regime-dependent, and we report the measured
+outcome rather than a verdict.  We deliberately keep their \emph{stock}
+innovation gate and process noise rather than re-tuning them to our
+platform: the question here is out-of-the-box coupling, and any re-tune
+would confound it with our own parameter search.  Here (the reverse direction) we port their ekf-rio and
+its multi-radar generalization
+x-rio~\cite{doer2021xrio} (run single-radar) onto our data; ekf-yrio was the
+comparator in the forward direction (our solver on their data) above.  On the slow-racing flight both ekf-rio
+and x-rio fail: their
+$\chi^2(3)$ innovation gate rejects $99.7\%$ of the radar ego-velocity
+updates (301 of 302), so the filter reverts to \ac{imu} dead-reckoning and
+runs essentially unconstrained ($>2$\,km of error for both, almost
+entirely vertical, $\approx\tfrac12 g t^2$).  On the faster flight ekf-rio
+instead survives, degrading to $1.4$\,m ($3.1\%$ drift,
+$9.0\degree$): its larger translational excitation produces radar
+ego-velocities that clear the gate (only $64\%$ rejected), enough to
+constrain the filter.  The radar information admitted thus
+scales with how strongly motion excites the sparse Doppler; the common
+cause is a stack-level mismatch, not a defect of their
+method: our best-velocity firmware yields only $\sim$13 points per
+frame (their \ac{ransac}/$\sigma$-gates expect order-100 clouds, and ego-velocity
+estimation fails on roughly half of all scans), there is no hardware radar
+trigger, and our racing-frame vibration exceeds their process-noise range
+(measured in-flight gyro PSD ${\approx}2.1$ vs.\ their
+${\approx}0.2\,\degree/\mathrm{s}/\sqrt{\mathrm{Hz}}$ default),
+making propagation overconfident so the gate rejects the survivors.
+This is a design-space split (\autoref{sec:conclusion}), not a defect of
+either method: their stack runs near sensor rate on dense clouds, ours
+spends \SI{0.35}{}--\SI{0.70}{\second} per window on sparse Doppler,
+an accuracy-versus-latency trade.
+This reverse direction thus measures how their stock filters
+\emph{couple} to an out-of-distribution sensor stack, not the relative quality
+of the two estimators: any filter starves on ${\sim}13$-point clouds it was not
+designed for, so we report it as a sensitivity characterization, not a
+head-to-head result.
+
+\begin{table}[t]
+\caption{Cross-Validation on the Public ICINS-2021 Flight
+Datasets~\cite{doer2021yrio}, All Systems Under Our Causal Protocol}
+\label{tab:baselines}
+\centering
+\footnotesize
+% Single-column table: (a) headline (drift [\% path]) at \footnotesize, (b)
+% 9-column decomposition at \scriptsize so both fit \columnwidth.  Both fill
+% the column via \extracolsep{\fill} so they share one axis with no whitespace.
+% Absolute ATE [m] lives in (b)'s whole-traj column for the published cross-check.
+\setlength{\tabcolsep}{3pt}%
+\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}}lccc}
+\toprule
+\multicolumn{4}{@{}l}{\textit{(a)~drift [\% path] / velocity [m/s] / orientation [\degree]}}\\
+\midrule
+Flight (path) & ekf-rio & ekf-yrio & Ours \\
+\midrule
+1 (142\,m) & 1.0 / 0.20 / 10.1 & \textbf{0.3} / \textbf{0.08} / 0.70 & 0.6 / 0.08 / \textbf{0.51} \\
+2 (45\,m)  & 0.6 / 0.08 / 1.59 & \textbf{0.4} / \textbf{0.08} / \textbf{0.91} & 1.1 / 0.08 / 0.94 \\
+3 (147\,m) & \textbf{0.3} / 0.08 / 1.07 & \textbf{0.3} / 0.08 / 1.09 & 1.3 / \textbf{0.07} / \textbf{0.52} \\
+4 (78\,m)  & 0.5 / 0.09 / 3.67 & \textbf{0.3} / \textbf{0.07} / 1.41 & 1.2 / 0.07 / \textbf{1.13} \\
+\bottomrule
+\end{tabular*}
+
+\vspace{4pt}
+
+{\scriptsize
+\setlength{\tabcolsep}{1.5pt}%
+\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}}lcccccccc}
+\toprule
+\multicolumn{9}{@{}l}{\textit{(b)~Decomposition}\quad(systems: ekf-rio / ekf-yrio / Ours)}\\
+\midrule
+ & \multicolumn{3}{c}{Roll/pitch [\degree]} & \multicolumn{2}{c}{Our drift [\%]} & \multicolumn{3}{c}{Whole ATE [m]} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-6}\cmidrule(lr){7-9}
+Fl.\ & rio & yrio & Ours & hor.\ & ver.\ & rio & yrio & Ours \\
+\midrule
+1 & 0.24 & 0.25 & 0.25 & 0.16 & 0.63 & 0.87 & 0.23 & 0.46 \\
+2 & 0.57 & 0.59 & 0.55 & 0.14 & 1.13 & 0.13 & 0.10 & 0.24 \\
+3 & 0.25 & 0.26 & 0.27 & 0.30 & 1.28 & 0.36 & 0.26 & 0.76 \\
+4 & 0.74 & 0.74 & 0.74 & 0.26 & 1.15 & 0.30 & 0.15 & 0.46 \\
+\bottomrule
+\end{tabular*}}
+
+\vspace{2pt}
+
+\parbox{\columnwidth}{\raggedright\scriptsize Live estimate, start-anchored
+  alignment.  \textbf{(a)}~headline; heading aiding differs by design (see
+  text).  \textbf{(b)}~decomposition: \emph{roll/pitch} is the
+  heading-independent attitude \ac{rmse} (yaw excluded), so the orientation
+  gap in~(a) is yaw, not attitude; \emph{our drift} splits position into
+  horizontal/vertical (both sub-1.3\% under the default \ac{ransac} prefilter,
+  \autoref{sec:models}); \emph{whole-traj.\ \ac{ate}} re-evaluates every system
+  under EVO/KITTI Umeyama alignment (no scale) for cross-checking published
+  figures.  Prefilter \emph{disabled} (Huber-only): vertical drift
+  $12$--$15\%$, whole-traj.\ \ac{ate} $9.57/2.88/10.86/5.48$\,m (flights~1--4).\par}
+\end{table}
+
+\subsection{Output Covariance Consistency (NEES)}
+\label{sec:nees}
+A factor source for a larger fusion graph must report \emph{honest}
+covariance.  Each window we extract the live-edge joint covariance of
+$(\vv_w, \vR)$ from the converged problem (\texttt{ceres::Covariance},
+active support control points, tangent space, marginalization prior
+included) and compute the \ac{nees} against the \emph{same} ground truth the
+headline uses (Vicon-fed velocity, slerp attitude), after masking windows at
+\ac{mocap} dropouts/glitches.  For a consistent estimator each 3-DoF block is
+$\chi^2_3$ with \emph{mean}~3; we report the per-window mean and, as its
+spread depends on the window count $N$, the 95\% interval for the
+$N$-window mean (not the wide per-sample $\chi^2_3$ interval).
+On the racing flights the covariance is \emph{calibrated} on fast-racing
+orientation (\ac{nees} mean $3.2$, $N{=}20$, inside the $N$-window 95\%
+interval $[2.0,4.2]$) and \emph{moderately conservative} on the other three
+channels: slow orientation $1.6$ ($N{=}49$), slow velocity $2.0$, fast
+velocity $1.0$, all below their lower bounds (slow $[2.4,3.7]$); i.e.\ the
+weights over-report uncertainty, most strongly for fast-racing velocity
+(${\sim}3\times$ in variance).  Conservative is the safe direction for a fusion
+factor.  These are \emph{calibration checks}, not powered hypothesis tests:
+consecutive windows are temporally correlated, so the expectation holds only
+heuristically.  On backflips only 6 of 50 windows
+survive the ground-truth mask (\autoref{sec:setup}), too few for a
+consistency statement; there the covariance is overconfident (orientation
+\ac{nees} mean~38, ${\sim}3.5\times$ in standard deviation; velocity~9.6),
+reported as a caveat.  Deployment recipe: inflate the emitted covariance per
+regime ($1\times$ gentle, $3\times$ aggressive), or calibrate online from
+innovations.
+
+\subsection{Ablation Studies}
+\autoref{tab:ablations} summarizes key design choices.
+
+\begin{table}[t]
+\centering
+\caption{Selected Ablation Results (batch solver, slow\_racing unless noted;
+  SW rows use the default 0.3\,s stride; bold: default configuration)}
+\label{tab:ablations}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Configuration & Pos (m) & Ori (\degree) \\
+\midrule
+\multicolumn{3}{l}{\textit{\ac{imu} rate (slow\_racing batch, no lever arm\textsuperscript{\dag})}} \\
+\quad 200\,Hz & 0.525 & 1.64 \\
+\quad \textbf{1000\,Hz (default)} & \textbf{0.183} & \textbf{1.02} \\
+\midrule
+\multicolumn{3}{l}{\textit{Lever-arm correction $\boldsymbol{\omega}{\times}\mathbf{t}_{bs}$ (batch)}} \\
+\quad No correction --- slow racing   & 0.183 & 1.02 \\
+\quad\quad\quad\quad\quad\ --- fast racing   & 0.862 & 2.73 \\
+\quad\quad\quad\quad\quad\ --- backflips     & 1.814 & 8.64 \\
+\quad \textbf{With correction --- slow}     & \textbf{0.169}  & \textbf{1.02} \\
+\quad\quad\quad\quad\quad\quad\ \textbf{--- fast}     & \textbf{0.768}  & \textbf{2.64} \\
+\quad\quad\quad\quad\quad\quad\ \textbf{--- backflips} & \textbf{1.814} & \textbf{8.44} \\
+\midrule
+\multicolumn{3}{l}{\textit{Orientation regularization (backflips batch)}} \\
+\quad Min-$\omega$ ($\lambda_{\omega}{=}0.001$) & 1.816 & 8.62 \\
+\quad \textbf{Min-$\alpha$, $\lambda_\alpha{=}0.1$ (default)} & \textbf{1.814} & \textbf{8.44} \\
+\quad Min-$\alpha$, $\lambda_\alpha{=}1.0$ & 2.069 & 83.8 \\
+\midrule
+\multicolumn{3}{l}{\textit{SW window dur.\ (slow\_racing SW, settled / live edge)}} \\
+\quad 1.5\,s & 0.292 / 0.299 & 1.51 / 2.01 \\
+\quad \textbf{3.0\,s (default)} & \textbf{0.293 / 0.310} & \textbf{1.53 / 1.97} \\
+\quad 5.0\,s & 0.313 / 0.341 & 1.49 / 2.03 \\
+\midrule
+\multicolumn{3}{l}{\textit{SW window dur.\ (fast\_racing SW, settled / live edge)}} \\
+\quad 2.0\,s & 0.455 / 0.518 & 2.33 / 2.95 \\
+\quad \textbf{3.0\,s (default)} & \textbf{0.382 / 0.469} & \textbf{2.34 / 2.90} \\
+\midrule
+\multicolumn{3}{l}{\textit{Marginalization (fast\_racing SW, settled)}\textsuperscript{\ddag}} \\
+\quad None (boundary prior only) & 0.466 & 2.68 \\
+\quad \textbf{Schur complement} & \textbf{0.382} & \textbf{2.34} \\
+\bottomrule
+\multicolumn{3}{@{}p{\columnwidth}@{}}{\scriptsize
+  Batch rows (\ac{imu}-rate, lever-arm, ori-reg) isolate one
+  design choice at a fixed pre-\ac{ransac} operating point; the \ac{ransac} default
+  shifts batch absolutes (slow batch 0.169$\to$0.198\,m / 1.02$\to$1.1\degree,
+  fast 0.768$\to$0.74\,m, the \autoref{sec:results} batch figures) without
+  changing orderings.  The SW rows (window duration, marginalization)
+  are under the \ac{ransac} default.  All runs use the sensor-only init
+  (\autoref{sec:init}); the bias seed shifts batch absolutes comparably,
+  again without changing orderings.
+  \textsuperscript{\dag}Lever arm disabled for isolation; see Lever-arm rows
+  for the current default (0.169\,m/1.02\degree).
+  \textsuperscript{\ddag}Marginalization shown for \texttt{fast\_racing}; on
+  slow\_racing the near-zero optimal prior makes Schur and boundary-only
+  nearly equivalent.}\\
+\end{tabular}
+\end{table}
+
+\textbf{Key observations from \autoref{tab:ablations}.}
+Full-rate \ac{imu} (1\,kHz) improves position by $2.9\times$ over 200\,Hz,
+motivating the tight bias priors in the solver configuration.
+Lever-arm correction helps racing ($8$--$11\%$ position) but has
+negligible effect on backflips: at $\Delta t_o{=}0.8$\,ms the dense
+spline absorbs the $|\bm{\omega}{\times}\mathbf{t}_{bs}|\approx1$\,m/s
+term through orientation DoF.
+Schur marginalization reduces fast-racing settled position by 18\%
+(0.466\,m $\to$ 0.382\,m); for slow racing the optimal prior scale is
+$10^{-7}$ (near-zero), so both variants give equivalent results;
+the benefit is captured in \autoref{tab:prior_scale} instead.
+Window duration has little effect on either racing regime: slow stays at
+live 0.30--0.34\,m across 1.5--5\,s, and fast gives essentially equal
+orientation at 2\,s and 3\,s (settled 2.33\degree\ vs 2.34\degree) with
+3\,s modestly better on position (live drift 1.15 vs 1.04\%).  We keep
+3\,s as the default for that small position gain, trading latency.

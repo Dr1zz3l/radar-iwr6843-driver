@@ -1,0 +1,43 @@
+# C++ solver overrides (applied on top of solver.yaml when --cpp is active)
+#
+# Key differences vs Python solver:
+#  - Full-rate IMU (~1000 Hz) allows much tighter bias priors — bias can't absorb dynamics
+#    because the gyro/accel factors have enough density to constrain the trajectory directly.
+#  - lambda_gyro raised from 1.0 → 4.0: improves orientation tracking across all bags.
+#  - lambda_snap_pos lowered from 1e-4 → 2e-5: allows position spline to track faster dynamics
+#    (racing flight) without over-smoothing. Still adequate for gentle flight.
+#
+# Results vs Python baseline on --mocap-yaw (with lever arm correction):
+#   slow_racing:  0.180m / 1.07°  (vs Python 0.374m / 3.32°)
+#   fast_racing:  1.110m / 2.56°  (vs Python 1.40m  / 4.38°)
+#   backflips:    0.527m / 3.77°  (vs Python 1.88m  / 13°)  — 5.6× pos improvement from lever arm
+# Pre-lever-arm batch: slow 0.146m/0.96°, fast 0.925m/2.35°, backflips 2.93m/10.7°
+
+# IMU preintegration (Forster TRO-2017)
+# Replaces 1000 Hz raw IMU with preintegrated factors at preint_hz.
+# dt_ori is coupled: dt_ori = 1/preint_hz (set automatically in Python).
+# lambda_preint starting point: lambda_gyro * sqrt(preint_dt * imu_hz) ≈ 4 * sqrt(0.01*1000) ≈ 40
+use_preintegration: false  # preint at 100 Hz degrades orientation: 1:1 constraint ratio vs raw gyro's 8:1
+preint_hz: 100.0
+lambda_preint: 40.0    # weight for r_R (rotation residuals)
+lambda_preint_v: 0.0   # weight for r_v (velocity residuals); 0 = disabled
+lambda_preint_p: 0.0   # weight for r_p (position residuals); 0 = disabled
+
+lambda_gyro: 4.0
+lambda_snap_pos: 0.00002
+lambda_bias_prior_accel: 10000.0
+lambda_bias_prior_gyro: 10000.0
+num_threads: 0   # 0 = auto (all logical cores via hardware_concurrency)
+
+# Sliding window (used when --sliding-window is active)
+# Phase 4b results (--mocap-yaw, Schur marginalization, marg_prior_scale=2e-4):
+#   slow_racing:  0.162m / 1.77°  (vs batch 0.146m / 0.96°)
+#   fast_racing:  0.710m / 4.26°  (vs batch 0.925m / 2.35°  — better in pos!)
+# marg_prior_scale critical: raw Schur complement is O(10^5-10^6) per-entry (3000 IMU/window),
+# orders of magnitude tighter than lambda_boundary=1000.  Scale ~2e-4 matches the boundary
+# prior regime and lets the boundary CPs adapt to new data.
+window_duration: 3.0        # seconds of history per solve
+window_stride: 0.3          # advance interval (seconds) → ~3 Hz update rate
+n_fix_leading_pos: 0        # 0 = rely on prior only; N_POS=6 to freeze
+n_fix_leading_ori: 0        # 0 = rely on prior only; N_ORI=4 to freeze
+marg_prior_scale: 0.0002    # scale applied to sqrt_info before attaching prior
